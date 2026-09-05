@@ -3,7 +3,6 @@
 // siteye JSON olarak sunar.
 
 require('dotenv').config();
-const crypto = require('crypto');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
@@ -20,9 +19,7 @@ process.on('unhandledRejection', (reason) => {
 const { matchProduct } = require('./match-product');
 const { rankByPower, computeHardwareScore } = require('./ai-rank');
 const { getInstallmentOptions } = require('./installments');
-const { renderProductPage, renderNotFoundPage, renderVerifyPage, slugify } = require('./product-page');
-const { sendEmail } = require('./email');
-const { checkPriceAlerts } = require('./check-price-alerts');
+const { renderProductPage, renderNotFoundPage, slugify } = require('./product-page');
 const { createRateLimiter } = require('./rate-limit');
 
 // Ürün detay sayfalarının (SSR) ve sitemap'in mutlak URL üretmesi için.
@@ -87,25 +84,6 @@ app.use((req, res, next) => {
 // ---------------------------------------------------------------------
 // Oran sınırlayıcılar (spam/kötüye kullanım koruması)
 // ---------------------------------------------------------------------
-const priceAlertIpLimiter = createRateLimiter({
-  windowMs: 60 * 60 * 1000, // 1 saat
-  max: 5,
-  keyFn: req => req.ip,
-  message: 'Çok fazla fiyat alarmı isteği gönderdin, bir saat sonra tekrar dene.',
-});
-const priceAlertEmailLimiter = createRateLimiter({
-  windowMs: 24 * 60 * 60 * 1000, // 24 saat
-  max: 5,
-  // e-posta bazlı: aynı adres, farklı IP'lerden hedeflense bile korunsun
-  keyFn: req => (req.body?.email || '').toLowerCase().trim(),
-  message: 'Bu e-posta adresi için çok fazla alarm isteği oluşturuldu, yarın tekrar dene.',
-});
-const verifyLimiter = createRateLimiter({
-  windowMs: 60 * 1000,
-  max: 30,
-  keyFn: req => req.ip,
-  message: 'Çok fazla istek, biraz sonra tekrar dene.',
-});
 const aiSearchLimiter = createRateLimiter({
   windowMs: 60 * 1000,
   max: 20,
@@ -321,153 +299,6 @@ app.get('/api/stats', async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'İstatistikler getirilemedi' });
-  }
-});
-
-// ---------------------------------------------------------------------
-// POST /api/price-alerts — fiyat düşüş alarmı oluşturur (e-posta onayı
-// gerektirir). Body: { productId, email, targetPrice }
-//
-// Önceden buraya HERHANGİ bir e-posta adresi girilebiliyor ve alarm
-// hemen aktif oluyordu — yani biri başkasının e-postasını yazıp o kişiye
-// istemsiz bildirim gönderttirebilirdi. Şimdi alarm "onaylanmamış"
-// olarak kaydediliyor, gerçek bildirim ancak kullanıcı e-postasına gelen
-// linke tıklayıp sahipliğini doğruladıktan sonra gönderiliyor
-// (bkz. GET /api/price-alerts/verify).
-// ---------------------------------------------------------------------
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-app.post('/api/price-alerts', priceAlertIpLimiter, priceAlertEmailLimiter, async (req, res) => {
-  try {
-    const { productId, email, targetPrice } = req.body;
-
-    if (!productId || !email || !targetPrice) {
-      return res.status(400).json({ error: 'productId, email ve targetPrice zorunludur' });
-    }
-    if (typeof email !== 'string' || email.length > 254 || !EMAIL_RE.test(email)) {
-      return res.status(400).json({ error: 'Geçerli bir e-posta adresi gir' });
-    }
-    const target = Number(targetPrice);
-    if (!Number.isFinite(target) || target <= 0 || target > 10_000_000) {
-      return res.status(400).json({ error: 'Hedef fiyat geçerli bir sayı olmalı' });
-    }
-
-    const { rows: productRows } = await pool.query('SELECT id, canonical_name FROM products WHERE id = $1', [productId]);
-    if (productRows.length === 0) {
-      return res.status(404).json({ error: 'Ürün bulunamadı' });
-    }
-
-    const verifyToken = crypto.randomBytes(24).toString('hex');
-
-    await pool.query(
-      `INSERT INTO price_alerts (product_id, email, target_price, verify_token)
-       VALUES ($1, $2, $3, $4)`,
-      [productId, email, target, verifyToken]
-    );
-
-    const verifyUrl = `${BACKEND_URL}/api/price-alerts/verify?token=${verifyToken}`;
-    const cancelUrl = `${BACKEND_URL}/api/price-alerts/cancel?token=${verifyToken}`;
-    await sendEmail({
-      to: email,
-      subject: `Fiyat alarmını onayla — ${productRows[0].canonical_name}`,
-      text:
-        `${productRows[0].canonical_name} için ${target.toLocaleString('tr-TR')} TL hedefiyle bir fiyat alarmı kurdun.\n\n` +
-        `Bu alarmı aktif etmek için onayla:\n${verifyUrl}\n\n` +
-        `Bu isteği sen yapmadıysan bu e-postayı yok sayabilirsin — onaylamadığın sürece hiçbir bildirim gönderilmeyecek.\n\n` +
-        `Bu e-postayı sakla — alarmını daha sonra iptal etmek istersen şu linki kullanabilirsin:\n${cancelUrl}`,
-    });
-
-    // Frontend zaten sadece başarı/hata durumunu kontrol ediyor, kendi
-    // gönderdiği email/targetPrice'ı zaten biliyor — veritabanının
-    // internal id'sini veya kaydı olduğu gibi geri döndürmenin bir
-    // faydası yok, gereksiz bilgi ifşası (kullanıcının kendi verisi
-    // olsa da minimum ifşa ilkesi).
-    res.status(201).json({ needsVerification: true });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Alarm oluşturulamadı' });
-  }
-});
-
-// ---------------------------------------------------------------------
-// GET /api/price-alerts/verify?token=... — e-posta sahipliğini doğrular
-// ---------------------------------------------------------------------
-app.get('/api/price-alerts/verify', verifyLimiter, async (req, res) => {
-  try {
-    const { token } = req.query;
-    if (!token) {
-      return res.status(400).type('html').send(renderVerifyPage({
-        success: false, message: 'Geçersiz bağlantı.', frontendUrl: FRONTEND_URL,
-      }));
-    }
-
-    const { rows } = await pool.query(
-      `UPDATE price_alerts SET verified_at = now()
-       WHERE verify_token = $1 AND verified_at IS NULL AND is_active = true
-       RETURNING id`,
-      [token]
-    );
-
-    if (rows.length === 0) {
-      return res.type('html').send(renderVerifyPage({
-        success: false,
-        message: 'Bu onay bağlantısı geçersiz, süresi dolmuş ya da zaten kullanılmış.',
-        frontendUrl: FRONTEND_URL,
-      }));
-    }
-
-    res.type('html').send(renderVerifyPage({
-      success: true,
-      message: 'Fiyat hedefine ulaşıldığında sana e-posta ile haber vereceğiz.',
-      frontendUrl: FRONTEND_URL,
-      cancelUrl: `${BACKEND_URL}/api/price-alerts/cancel?token=${token}`,
-    }));
-  } catch (err) {
-    console.error(err);
-    res.status(500).type('html').send('<h1>Bir hata oluştu</h1>');
-  }
-});
-
-// ---------------------------------------------------------------------
-// GET /api/price-alerts/cancel?token=... — kullanıcı fikrini değiştirirse
-// tek tıkla alarmı iptal eder (hesap/giriş gerektirmez — aynı token,
-// onay linkiyle birlikte gönderilen e-postada da duruyor).
-// ---------------------------------------------------------------------
-app.get('/api/price-alerts/cancel', verifyLimiter, async (req, res) => {
-  try {
-    const { token } = req.query;
-    if (!token) {
-      return res.status(400).type('html').send(renderVerifyPage({
-        success: false, message: 'Geçersiz bağlantı.', frontendUrl: FRONTEND_URL,
-        pageTitle: 'İptal başarısız', heading: 'Onay bağlantısı geçersiz',
-      }));
-    }
-
-    const { rows } = await pool.query(
-      `UPDATE price_alerts SET is_active = false
-       WHERE verify_token = $1 AND is_active = true
-       RETURNING id`,
-      [token]
-    );
-
-    if (rows.length === 0) {
-      return res.type('html').send(renderVerifyPage({
-        success: false,
-        message: 'Bu alarm zaten iptal edilmiş, daha önce tetiklenmiş ya da bulunamadı.',
-        frontendUrl: FRONTEND_URL,
-        pageTitle: 'İptal edilemedi', heading: 'Alarm bulunamadı',
-      }));
-    }
-
-    res.type('html').send(renderVerifyPage({
-      success: true,
-      message: 'Fiyat alarmın iptal edildi, bundan sonra hiçbir bildirim göndermeyeceğiz.',
-      frontendUrl: FRONTEND_URL,
-      pageTitle: 'Alarm iptal edildi', heading: '✓ Fiyat alarmın iptal edildi',
-    }));
-  } catch (err) {
-    console.error(err);
-    res.status(500).type('html').send('<h1>Bir hata oluştu</h1>');
   }
 });
 
@@ -1251,17 +1082,6 @@ app.get('/og-image.png', (req, res) => {
   res.sendFile(path.join(__dirname, 'og-image.png'));
 });
 
-// Fiyat alarmlarını düzenli aralıklarla kontrol et — eskiden bu sadece
-// elle (node check-price-alerts.js) çalıştırılıyordu, canlıya alınca
-// ayrıca bir cron kurmayı unutmak kolaydı. Artık sunucu ayaktayken
-// kendiliğinden çalışıyor.
-const ALERT_CHECK_INTERVAL_MS = 60 * 60 * 1000; // saatte bir
-function runPriceAlertCheck() {
-  checkPriceAlerts(pool, { frontendUrl: FRONTEND_URL })
-    .catch(err => console.error('✘ Fiyat alarmı kontrolü hatası:', err.message));
-}
-setInterval(runPriceAlertCheck, ALERT_CHECK_INTERVAL_MS);
-
 // Tanımsız route'lar için düz JSON 404 (Express'in varsayılan HTML
 // sayfası yerine).
 app.use((req, res) => {
@@ -1284,5 +1104,4 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Makulbul API çalışıyor: http://localhost:${PORT}`);
-  runPriceAlertCheck(); // sunucu açılır açılmaz bir kez de hemen çalıştır
 });

@@ -108,14 +108,13 @@ için tüm API isteklerini reddeder.
 |---|---|
 | `DATABASE_URL`, `DB_SSL` | Veritabanı bağlantısı (bkz. madde 3) |
 | `FRONTEND_URL` | Siteni nereye deploy ettiysen o adres (örn. `https://cepfiyat.com`). CORS **sadece** bu adrese izin verir — yanlış/eksikse site tamamen açılmaz. |
-| `BACKEND_URL` | Backend'in kendi canlı adresi (örn. `https://cepfiyat-api.onrender.com`). Ürün sayfaları, sitemap.xml ve e-posta onay linkleri bunu kullanır. |
+| `BACKEND_URL` | Backend'in kendi canlı adresi (örn. `https://cepfiyat-api.onrender.com`). Ürün sayfaları ve sitemap.xml bunu kullanır. |
 | `NODE_ENV` | `production` yaz — http→https yönlendirmesi ve HSTS güvenlik başlığı ancak o zaman devreye girer. |
 
 **Opsiyonel (boş bırakılırsa ilgili özellik "ücretsiz/stub" modda çalışmaya devam eder):**
 
 | Değişken | Ne işe yarar |
 |---|---|
-| `RESEND_API_KEY`, `ALERT_FROM_EMAIL` | Fiyat alarmı e-postalarının **gerçekten** gönderilmesi için (resend.com). Boşsa e-posta gönderilmez, ne gönderileceği sadece sunucu loguna yazılır. |
 | `ANTHROPIC_API_KEY` | "En güçlü model" aramasını Claude'a soydurmak için — ücretsiz çip+RAM yöntemi zaten var, bu tamamen opsiyonel bir yükseltme (madde 10). |
 | `STATS_KEY` | `GET /api/stats`'ı (birinci taraf ziyaret istatistikleri) herkese açık bırakmamak için bir parola. |
 
@@ -212,10 +211,6 @@ belgelenmemiş özellikler:
   her ürün için sunucu tarafında render edilmiş (SSR), gerçek meta
   etiketleri ve JSON-LD içeren bir sayfa. `GET /sitemap.xml` ve
   `GET /robots.txt` da bunun için var.
-- **Fiyat düşüş alarmı** (`GET/POST /api/price-alerts*`, `check-price-alerts.js`,
-  `email.js`) — e-posta onayı (double opt-in) gerektirir, sunucu saatte
-  bir otomatik kontrol eder, `RESEND_API_KEY` yoksa "stub" modda (konsola
-  yazarak) çalışır.
 - **Taksit hesaplama** (`installments.js`) — sadece belirli satıcılarda,
   BDDK'nın telefon/elektronikte taksiti 6 ay ile sınırlayan düzenlemesine
   uygun (3/6 ay).

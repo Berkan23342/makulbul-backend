@@ -210,28 +210,6 @@ ${renderNav(frontendUrl)}
 </body></html>`;
 }
 
-// Fiyat alarmı onay linkine tıklanınca gösterilen basit sonuç sayfası.
-function renderVerifyPage({ success, message, frontendUrl, pageTitle, heading, cancelUrl }) {
-  const titleText = pageTitle || (success ? 'Alarm onaylandı' : 'Onay başarısız');
-  const headingText = heading || (success ? '✓ Fiyat alarmın onaylandı' : 'Onay bağlantısı geçersiz');
-  return `<!doctype html>
-<html lang="tr"><head><meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${esc(titleText)} — Makulbul</title>
-<meta name="robots" content="noindex">
-${FAVICON_LINK}
-<style>${PAGE_STYLE}</style>
-</head><body>
-${renderNav(frontendUrl)}
-<div class="wrap not-found">
-  <h1>${esc(headingText)}</h1>
-  <p class="muted">${esc(message)}</p>
-  ${cancelUrl ? `<p class="muted" style="margin-top:16px">Fikrini değiştirirsen: <a href="${esc(cancelUrl)}">bu alarmı iptal et</a></p>` : ''}
-  <a class="back-link" href="${frontendUrl}/index.html#catalog">← Tüm modellere dön</a>
-</div>
-</body></html>`;
-}
-
 function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
   const specs = product.specs || {};
   const offers = [...(product.offers || [])].sort((a, b) => a.price - b.price);
@@ -390,4 +368,4 @@ ${renderNav(frontendUrl)}
 </html>`;
 }
 
-module.exports = { renderProductPage, renderNotFoundPage, renderVerifyPage, slugify };
+module.exports = { renderProductPage, renderNotFoundPage, slugify };
