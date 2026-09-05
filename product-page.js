@@ -46,6 +46,29 @@ function fmtTL(n) {
   return Number(n).toLocaleString('tr-TR') + ' TL';
 }
 
+// Renk isimlerinden (ör. "Kozmik Turuncu", "Buzul Mavisi") yaklaşık bir
+// gösterim rengi çıkarır — marka rengiyle birebir aynı olması şart değil,
+// sadece görsel bir ipucu (hangi rengin "sıcak/soğuk/açık/koyu" olduğunu
+// hissettirmek için).
+function colorSwatchHex(name) {
+  const n = name.toLowerCase();
+  if (n.includes('siyah') || n.includes('obsidyen') || n.includes('gece') || n.includes('arduvaz')) return '#1c1c1e';
+  if (n.includes('beyaz') || n.includes('porselen') || n.includes('bulut')) return '#f2f1ed';
+  if (n.includes('mavi') || n.includes('lacivert') || n.includes('indigo') || n.includes('gökyüzü') || n.includes('gelgit')) return '#3d6ea5';
+  if (n.includes('kırmızı') || n.includes('mercan') || n.includes('red')) return '#c0392b';
+  if (n.includes('yeşil') || n.includes('yosun') || n.includes('yeşim') || n.includes('adaçayı') || n.includes('zeytin') || n.includes('limon otu')) return '#5c7d5a';
+  if (n.includes('sarı')) return '#d8c22c';
+  if (n.includes('mor') || n.includes('lavanta') || n.includes('orkide') || n.includes('kobalt')) return '#7b5ea7';
+  if (n.includes('pembe') || n.includes('rose')) return '#dfa3b5';
+  if (n.includes('turkuaz')) return '#2a9d8f';
+  if (n.includes('turuncu')) return '#d9782d';
+  if (n.includes('altın') || n.includes('gold')) return '#c9a86a';
+  if (n.includes('gümüş') || n.includes('silver')) return '#c7c7c9';
+  if (n.includes('gri') || n.includes('grafit') || n.includes('antrasit') || n.includes('titanyum')) return '#8a8a8e';
+  if (n.includes('bej')) return '#d8c6a8';
+  return '#9a9a9a';
+}
+
 const SPEC_LABELS = [
   ['ram_gb', 'RAM', v => `${v} GB`],
   ['storage_gb', 'Depolama', v => `${v} GB`],
@@ -117,6 +140,19 @@ const PAGE_STYLE = `
   .seller-line{font-size:13.5px;color:var(--muted);margin-top:4px}
   .lowest-badge{display:flex;align-items:center;gap:5px;margin-top:9px;font-size:12px;font-weight:600;color:var(--deal)}
   .lowest-badge svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+  .color-picker{margin-top:18px}
+  .color-picker-label{font-size:12px;color:var(--muted);margin-bottom:8px}
+  .color-swatches{display:flex;gap:8px;flex-wrap:wrap}
+  .color-swatch{
+    width:30px;height:30px;border-radius:50%;padding:2px;border:2px solid transparent;
+    background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  }
+  .color-swatch.selected{border-color:var(--signal)}
+  .color-swatch .swatch-dot{
+    width:100%;height:100%;border-radius:50%;background:var(--swatch-color);
+    border:1px solid rgba(255,255,255,.15);display:block;
+  }
+  .color-picker-selected{font-size:13px;color:var(--text);margin-top:9px;font-weight:600}
   section{margin-bottom:36px}
   section h2{font-size:18px;margin:0 0 16px}
   table.spec-table{width:100%;border-collapse:collapse;font-size:13.5px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
@@ -137,25 +173,6 @@ const PAGE_STYLE = `
     font-size:13px;padding:9px 14px;border-radius:9px;text-decoration:none;white-space:nowrap;
   }
   .ad-tag{font-size:9px;font-weight:600;opacity:.85;text-transform:uppercase;letter-spacing:.03em}
-  #history-chart{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px}
-  .history-meta{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-bottom:8px}
-  .history-change{font-weight:700;font-family:'IBM Plex Mono',monospace}
-  .chart-wrap{position:relative}
-  .history-svg{width:100%;height:110px;display:block;cursor:crosshair}
-  .hover-line{stroke:var(--border);stroke-width:1;opacity:0;transition:opacity .1s}
-  .hover-line.show{opacity:1}
-  .hover-dot{fill:var(--signal);stroke:var(--bg);stroke-width:2;opacity:0;transition:opacity .1s}
-  .hover-dot.show{opacity:1}
-  .chart-tooltip{
-    position:absolute;pointer-events:none;opacity:0;transition:opacity .1s;
-    background:var(--surface-2);border:1px solid var(--border);border-radius:8px;
-    padding:7px 10px;white-space:nowrap;transform:translate(-50%,-125%);z-index:5;
-    box-shadow:0 10px 24px -8px rgba(0,0,0,.6);
-  }
-  .chart-tooltip.show{opacity:1}
-  .chart-tooltip .tt-date{display:block;font-size:10.5px;color:var(--muted);margin-bottom:2px}
-  .chart-tooltip .tt-price{display:block;font-size:13px;font-weight:700;font-family:'IBM Plex Mono',monospace}
-  .history-range{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:9px;font-family:'IBM Plex Mono',monospace}
   .muted{color:var(--muted);font-size:13px;margin:0}
   .not-found{padding:80px 24px;text-align:center}
 `;
@@ -172,14 +189,14 @@ const FAVICON_LINK = `<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22ht
 
 function renderNav(frontendUrl) {
   return `<header class="nav"><div class="wrap">
-    <a href="${frontendUrl}/index.html" class="logo"><span class="dot"></span>Cepfiyat</a>
+    <a href="${frontendUrl}/index.html" class="logo"><span class="dot"></span>Makulbul</a>
   </div></header>`;
 }
 
 function renderNotFoundPage(frontendUrl) {
   return `<!doctype html>
 <html lang="tr"><head><meta charset="UTF-8">
-<title>Ürün bulunamadı — Cepfiyat</title>
+<title>Ürün bulunamadı — Makulbul</title>
 <meta name="robots" content="noindex">
 ${FAVICON_LINK}
 <style>${PAGE_STYLE}</style>
@@ -200,7 +217,7 @@ function renderVerifyPage({ success, message, frontendUrl, pageTitle, heading, c
   return `<!doctype html>
 <html lang="tr"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${esc(titleText)} — Cepfiyat</title>
+<title>${esc(titleText)} — Makulbul</title>
 <meta name="robots" content="noindex">
 ${FAVICON_LINK}
 <style>${PAGE_STYLE}</style>
@@ -221,10 +238,10 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
   const best = offers[0];
   const slug = slugify(product.canonical_name);
   const canonicalUrl = `${backendUrl}/urun/${product.id}/${slug}`;
-  const title = `${product.canonical_name} Fiyatları ve Özellikleri — Cepfiyat`;
+  const title = `${product.canonical_name} Fiyatları ve Özellikleri — Makulbul`;
   const description = best
-    ? `${product.canonical_name} fiyatlarını karşılaştır: ${offers.length} satıcı arasında en uygun fiyat ${fmtTL(best.price)}. Teknik özellikler, fiyat geçmişi ve satıcı karşılaştırması Cepfiyat'ta.`
-    : `${product.canonical_name} teknik özellikleri ve fiyat karşılaştırması Cepfiyat'ta.`;
+    ? `${product.canonical_name} fiyatlarını karşılaştır: ${offers.length} satıcı arasında en uygun fiyat ${fmtTL(best.price)}. Teknik özellikler, fiyat geçmişi ve satıcı karşılaştırması Makulbul'ta.`
+    : `${product.canonical_name} teknik özellikleri ve fiyat karşılaştırması Makulbul'ta.`;
 
   const isLowestIn30d = best && minPrice30d != null && Number(best.price) <= Number(minPrice30d) + 0.5;
 
@@ -232,6 +249,21 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
     .filter(([key]) => specs[key] !== undefined && specs[key] !== null)
     .map(([key, label, fmtFn]) => `<tr><th>${esc(label)}</th><td>${esc(fmtFn(specs[key]))}</td></tr>`)
     .join('');
+
+  // Renk seçimi salt bilgilendirme amaçlı — kataloğumuzda renge göre ayrı
+  // fiyat/teklif yok, o yüzden seçim sadece görsel olarak hangi rengin
+  // vurgulandığını değiştiriyor (satın alınacak teklifi etkilemiyor).
+  const colors = Array.isArray(specs.colors) ? specs.colors : [];
+  const colorSwatches = colors.length ? `
+    <div class="color-picker" id="color-picker">
+      <div class="color-picker-label">Renk Seçenekleri</div>
+      <div class="color-swatches">
+        ${colors.map((c, i) => `
+          <button type="button" class="color-swatch${i === 0 ? ' selected' : ''}" data-color="${esc(c)}" style="--swatch-color:${colorSwatchHex(c)}" title="${esc(c)}" aria-label="${esc(c)}"><span class="swatch-dot"></span></button>
+        `).join('')}
+      </div>
+      <div class="color-picker-selected">${esc(colors[0])}</div>
+    </div>` : '';
 
   const offerRows = offers.map(o => `
     <div class="offer-row">
@@ -269,8 +301,11 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(description)}">
+<meta name="robots" content="index, follow">
 <link rel="canonical" href="${canonicalUrl}">
 <meta property="og:type" content="product">
+<meta property="og:site_name" content="Makulbul">
+<meta property="og:locale" content="tr_TR">
 <meta property="og:title" content="${esc(title)}">
 <meta property="og:description" content="${esc(description)}">
 <meta property="og:url" content="${canonicalUrl}">
@@ -302,6 +337,7 @@ ${renderNav(frontendUrl)}
         <div class="seller-line">${esc(best.seller_name)} üzerinden en uygun fiyat · ${offers.length} satıcı karşılaştırıldı</div>
         ${isLowestIn30d ? `<div class="lowest-badge"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v9"/><path d="M4.5 8 8 11.5 11.5 8"/></svg><span>Son 30 günün en düşük fiyatı</span></div>` : ''}
       ` : `<p class="muted">Şu an satışta değil.</p>`}
+      ${colorSwatches}
     </div>
   </div>
 
@@ -317,15 +353,13 @@ ${renderNav(frontendUrl)}
 
   <section>
     <h2>Fiyat geçmişi</h2>
-    <div id="history-chart"><p class="muted">Yükleniyor...</p></div>
+    <p class="muted">Yakında</p>
   </section>
 </main>
 
 <script>
 (function(){
   var API_BASE = ${JSON.stringify(backendUrl)};
-  var fmt = function(n){ return Number(n).toLocaleString('tr-TR') + ' TL'; };
-  var fmtDate = function(d){ return new Date(d).toLocaleDateString('tr-TR', {day:'numeric', month:'short', year:'numeric'}); };
 
   // Birinci taraf, kimliksiz sayfa görüntüleme sayacı
   fetch(API_BASE + '/api/track', {
@@ -334,103 +368,21 @@ ${renderNav(frontendUrl)}
     body: JSON.stringify({ path: location.pathname }),
   }).catch(function(){});
 
-  fetch(API_BASE + '/api/products/${product.id}/price-history?days=90')
-    .then(function(r){ return r.json(); })
-    .then(function(points){
-      var container = document.getElementById('history-chart');
-      var chart = buildChart(points);
-      container.innerHTML = chart.html;
-      if(chart.coords) attachChartInteraction(container, chart, points);
-    })
-    .catch(function(){
-      document.getElementById('history-chart').innerHTML = '<p class="muted">Fiyat geçmişi yüklenemedi.</p>';
+  // Renk seçici: sadece görsel bir tercih (fiyat/teklif renge göre
+  // değişmiyor, kataloğumuzda böyle bir ayrım yok) — hangi swatch'a
+  // tıklandıysa "selected" durumuna geçiyor ve alttaki etikette adı
+  // gösteriliyor.
+  var picker = document.getElementById('color-picker');
+  if (picker) {
+    var swatches = picker.querySelectorAll('.color-swatch');
+    var label = picker.querySelector('.color-picker-selected');
+    swatches.forEach(function(btn){
+      btn.addEventListener('click', function(){
+        swatches.forEach(function(b){ b.classList.remove('selected'); });
+        btn.classList.add('selected');
+        if (label) label.textContent = btn.dataset.color;
+      });
     });
-
-  function buildChart(points){
-    if(!points || points.length < 2){
-      return { html: '<p class="muted">Henüz yeterli fiyat geçmişi yok.</p>' };
-    }
-    var prices = points.map(function(pt){ return Number(pt.price); });
-    var min = Math.min.apply(null, prices);
-    var max = Math.max.apply(null, prices);
-    var range = (max - min) || 1;
-    var w = 700, h = 110, pad = 6;
-    var stepX = (w - pad*2) / (points.length - 1);
-    var coords = prices.map(function(price, i){
-      return [pad + i*stepX, pad + (h - pad*2) * (1 - (price - min)/range)];
-    });
-    var linePath = coords.map(function(c, i){ return (i===0?'M':'L') + c[0].toFixed(1) + ' ' + c[1].toFixed(1); }).join(' ');
-    var areaPath = linePath + ' L ' + coords[coords.length-1][0].toFixed(1) + ' ' + (h-pad) + ' L ' + coords[0][0].toFixed(1) + ' ' + (h-pad) + ' Z';
-    var first = prices[0], last = prices[prices.length-1];
-    var changePct = ((last - first) / first) * 100;
-    var changeLabel = (changePct >= 0 ? '+' : '') + changePct.toFixed(1) + '%';
-    var changeColor = changePct > 0.05 ? '#ff6b6b' : (changePct < -0.05 ? 'var(--deal)' : 'var(--muted)');
-    var lastC = coords[coords.length-1];
-    var startLabel = new Date(points[0].date).toLocaleDateString('tr-TR', {day:'numeric', month:'short'});
-    var endLabel = new Date(points[points.length-1].date).toLocaleDateString('tr-TR', {day:'numeric', month:'short'});
-
-    var html = '' +
-      '<div class="history-meta"><span>' + startLabel + ' — ' + endLabel + ' arası en iyi fiyat · noktaların üzerine gel</span>' +
-      '<span class="history-change" style="color:' + changeColor + '">' + changeLabel + '</span></div>' +
-      '<div class="chart-wrap">' +
-      '<svg viewBox="0 0 ' + w + ' ' + h + '" class="history-svg" preserveAspectRatio="none">' +
-      '<line class="hover-line" x1="0" y1="' + pad + '" x2="0" y2="' + (h-pad) + '"></line>' +
-      '<path d="' + areaPath + '" fill="var(--signal-soft)" stroke="none"></path>' +
-      '<path d="' + linePath + '" fill="none" stroke="var(--signal)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></path>' +
-      '<circle cx="' + lastC[0].toFixed(1) + '" cy="' + lastC[1].toFixed(1) + '" r="3.5" fill="var(--deal)"></circle>' +
-      '<circle class="hover-dot" r="4"></circle>' +
-      '</svg>' +
-      '<div class="chart-tooltip"><span class="tt-date"></span><span class="tt-price"></span></div>' +
-      '</div>' +
-      '<div class="history-range"><span>En düşük: ' + fmt(min) + '</span><span>En yüksek: ' + fmt(max) + '</span></div>';
-
-    return { html: html, coords: coords, w: w, h: h };
-  }
-
-  // Fare/parmak konumuna en yakın veri noktasını bulup üzerinde tarih +
-  // fiyatı gösteren bir tooltip ve dikey kılavuz çizgi çizer.
-  function attachChartInteraction(container, chart, points){
-    var svg = container.querySelector('.history-svg');
-    var wrap = container.querySelector('.chart-wrap');
-    var tooltip = container.querySelector('.chart-tooltip');
-    var hoverDot = container.querySelector('.hover-dot');
-    var hoverLine = container.querySelector('.hover-line');
-    var dateEl = tooltip.querySelector('.tt-date');
-    var priceEl = tooltip.querySelector('.tt-price');
-    var coords = chart.coords;
-
-    function update(clientX){
-      var rect = svg.getBoundingClientRect();
-      var relX = Math.max(0, Math.min(rect.width, clientX - rect.left));
-      var vbX = (relX / rect.width) * chart.w;
-      var nearest = 0, minDist = Infinity;
-      for(var i=0;i<coords.length;i++){
-        var d = Math.abs(coords[i][0] - vbX);
-        if(d < minDist){ minDist = d; nearest = i; }
-      }
-      var x = coords[nearest][0], y = coords[nearest][1];
-      hoverDot.setAttribute('cx', x); hoverDot.setAttribute('cy', y);
-      hoverLine.setAttribute('x1', x); hoverLine.setAttribute('x2', x);
-      hoverDot.classList.add('show'); hoverLine.classList.add('show');
-
-      var wrapRect = wrap.getBoundingClientRect();
-      var pxX = rect.left + (x / chart.w) * rect.width - wrapRect.left;
-      var pxY = rect.top + (y / chart.h) * rect.height - wrapRect.top;
-      tooltip.style.left = pxX + 'px';
-      tooltip.style.top = pxY + 'px';
-      dateEl.textContent = fmtDate(points[nearest].date);
-      priceEl.textContent = fmt(points[nearest].price);
-      tooltip.classList.add('show');
-    }
-    function hide(){
-      hoverDot.classList.remove('show'); hoverLine.classList.remove('show'); tooltip.classList.remove('show');
-    }
-
-    svg.addEventListener('mousemove', function(e){ update(e.clientX); });
-    svg.addEventListener('mouseleave', hide);
-    svg.addEventListener('touchstart', function(e){ update(e.touches[0].clientX); }, {passive:true});
-    svg.addEventListener('touchmove', function(e){ update(e.touches[0].clientX); e.preventDefault(); }, {passive:false});
-    svg.addEventListener('touchend', hide);
   }
 })();
 </script>

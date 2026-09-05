@@ -1,4 +1,4 @@
-// server.js — Cepfiyat API
+// server.js — Makulbul API
 // PostgreSQL'deki products/offers/sellers/brands tablolarını
 // siteye JSON olarak sunar.
 
@@ -132,6 +132,14 @@ pool.query('SELECT 1')
   .then(() => console.log('✔ PostgreSQL bağlantısı başarılı'))
   .catch(err => console.error('✘ PostgreSQL bağlantı hatası:', err.message));
 
+// Sitede SADECE bu üç satıcının teklifleri gösteriliyor — diğer
+// satıcılardan (N11, MediaMarkt, Vatan Bilgisayar, Teknosa, marka
+// resmi mağazaları vb.) gelen teklifler artık HİÇBİR yerde
+// görünmüyor. Bu üçünde teklifi olmayan bir ürün "Şu an satışta
+// değil" olarak gösterilir — başka bir siteden alışverişe
+// yönlendirilmez.
+const ALLOWED_SELLERS = ['Hepsiburada', 'Trendyol', 'Amazon TR'];
+
 // ---------------------------------------------------------------------
 // Yardımcı: bir ürün satırını + tekliflerini birlikte formatlar
 // ---------------------------------------------------------------------
@@ -143,9 +151,9 @@ async function attachOffers(products) {
             s.name AS seller_name
      FROM offers o
      JOIN sellers s ON s.id = o.seller_id
-     WHERE o.product_id = ANY($1::uuid[])
+     WHERE o.product_id = ANY($1::uuid[]) AND s.name = ANY($2::text[])
      ORDER BY o.price ASC`,
-    [ids]
+    [ids, ALLOWED_SELLERS]
   );
   return products.map(p => ({
     ...p,
@@ -163,7 +171,10 @@ app.get('/api/products', async (req, res) => {
   try {
     const { brand, maxPrice, nfc, sort } = req.query;
     const conditions = [`c.slug = 'telefon'`];
-    const params = [];
+    // ALLOWED_SELLERS her zaman $1 — aşağıdaki best_price alt sorgusu
+    // buna referans veriyor, sonraki dinamik filtreler (brand/maxPrice)
+    // $2'den başlıyor.
+    const params = [ALLOWED_SELLERS];
 
     if (brand) {
       params.push(brand);
@@ -175,7 +186,8 @@ app.get('/api/products', async (req, res) => {
 
     let sql = `
       SELECT p.id, p.canonical_name, b.name AS brand, p.specs,
-             (SELECT MIN(o.price) FROM offers o WHERE o.product_id = p.id) AS best_price,
+             (SELECT MIN(o.price) FROM offers o JOIN sellers s2 ON s2.id = o.seller_id
+                WHERE o.product_id = p.id AND s2.name = ANY($1::text[])) AS best_price,
              (SELECT MIN(ph.price) FROM price_history ph
                 JOIN offers o ON o.id = ph.offer_id
                 WHERE o.product_id = p.id AND ph.recorded_at >= NOW() - INTERVAL '30 days') AS min_price_30d
@@ -558,7 +570,42 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
       // yumuşak kriter, diğerleriyle birlikte harmanlanıyor.
       cheap: q.includes('ucuz') || q.includes('ekonomik'),
       expensive: q.includes('pahalı') || q.includes('lüks') || q.includes('premium') || q.includes('üst segment'),
+      // Ekran boyutu, RAM ve çıkış yılı 48 üründe de vardı ama hiçbir
+      // sorgu bunları kullanmıyordu — "büyük ekranlı"/"yüksek ram'li"/
+      // "en yeni" gibi son derece doğal istekler hiç karşılık bulmadan
+      // sessizce en ucuz telefona düşüyordu.
+      bigScreen: q.includes('büyük ekran') || q.includes('geniş ekran'),
+      smallScreen: q.includes('küçük ekran') || q.includes('mini ekran'),
+      highRam: q.includes('yüksek ram') || q.includes('bol ram') || q.includes('çok ram') || q.includes('büyük ram'),
+      newest: q.includes('en yeni') || q.includes('yeni çıkan') || q.includes('son model') || q.includes('son çıkan'),
     };
+    // Renk sorgusu: query'de geçen ilk renk kökünü (ek almadan, "mavi"
+    // hem "Mavi Titanyum" hem "Buzul Mavisi" içinde alt-dize olarak
+    // eşleşir) bul. Eşleşme varsa SERT filtre olarak uygulanıyor —
+    // "mavi telefon" dendiğinde mavi seçeneği OLMAYAN bir telefon
+    // önerilmemeli.
+    const COLOR_KEYWORDS = ['siyah', 'beyaz', 'mavi', 'kırmızı', 'yeşil', 'sarı', 'mor', 'pembe', 'gri', 'gümüş', 'altın', 'turuncu', 'lacivert', 'turkuaz', 'lavanta', 'bej', 'titanyum'];
+    const colorMatch = COLOR_KEYWORDS.find(c => q.includes(c));
+    // "X olmayan/olmadan telefon" — kullanıcı özelliğin TERSİNİ istiyor.
+    // Önceden bu hiç fark edilmiyordu: "kablosuz şarjı olmayan telefon"
+    // sorgusu "kablosuz şarj" alt dizesi hâlâ eşleştiği için normal
+    // (pozitif, en yüksek W'ı maksimize eden) davranışı tetikliyor ve
+    // kataloğun EN HIZLI kablosuz şarj eden telefonunu (80W) öneriyordu
+    // — istenenin tam tersi. Aşağıdaki ikili (var/yok) özellikler için
+    // negasyon artık destekleniyor (aşağıdaki sert filtre bloğuna bakın).
+    //
+    // İLK SÜRÜM sadece "olmayan"/"olmadan" kelimelerini arıyordu — ama
+    // Türkçe'de olumsuz sıfat-fiil eki HANGİ FİİLE eklenirse eklensin
+    // her zaman "-meyen"/"-mayan" ile biter (ünlü uyumu: e/a): "olmayan"
+    // (ol-ma-yan), ama aynı zamanda "çekemeyen" (çek-e-me-yen, "8K
+    // çekemeyen telefon"), "desteklemeyen" (destekle-me-yen), "içermeyen"
+    // (içer-me-yen) de bu kalıba uyuyor. Sadece "olmayan" arandığı için
+    // "8k video çekemeyen telefon" hiç negatif algılanmıyor, "çekemeyen"
+    // yine de "8k" alt dizesiyle POZİTİF filtreyi tetikleyip 8K
+    // ÇEKEBİLEN bir telefonu (istenenin tam tersini) öneriyordu. Fiil
+    // kökünden bağımsız olarak eki (meyen/mayan) aramak bu sınıftaki
+    // TÜM olumsuz ifadeleri tek seferde yakalıyor.
+    const negated = /meyen|mayan/.test(q) || q.includes('olmadan');
     // "25 bin", "25bin", "30k", "25.000 TL", "25,000TL", "100.000 tl" gibi
     // biçimlerin hepsini yakalar. Sayı grubu ondalık/binlik ayraçlı da
     // olabilir (\d{1,3}(?:[.,]\d{3})*) — bu durumda "bin"/"k" ile TEKRAR
@@ -672,32 +719,67 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
     const params = [];
     if (filters.brand) { params.push(filters.brand); conditions.push(`b.name = $${params.length}`); }
     if (subBrandPrefix) { params.push(subBrandPrefix + '%'); conditions.push(`p.canonical_name ILIKE $${params.length}`); }
-    if (filters.nfc) conditions.push(`(p.specs->>'has_nfc')::boolean = true`);
-    if (filters.video8k) conditions.push(`(p.specs->>'video_8k')::boolean = true`);
-    if (filters.satellite) conditions.push(`(p.specs->>'satellite_connectivity')::boolean = true`);
-    if (filters.foldable) conditions.push(`(p.specs->>'is_foldable')::boolean = true`);
-    if (filters.stylus) conditions.push(`(p.specs->>'has_stylus_support')::boolean = true`);
-    if (filters.irBlaster) conditions.push(`(p.specs->>'has_ir_blaster')::boolean = true`);
-    if (filters.faceUnlock) { params.push('Face ID (yüz tanıma)'); conditions.push(`p.specs->>'biometric_unlock' = $${params.length}`); }
-    if (filters.physicalSim) conditions.push(`(p.specs->>'sim_type') IS DISTINCT FROM 'Sadece eSIM'`);
-    if (filters.highRefreshRate) conditions.push(`(p.specs->>'refresh_rate_hz')::int >= 120`);
-    if (filters.headphoneJack) conditions.push(`(p.specs->>'has_headphone_jack')::boolean = true`);
-    if (filters.expandableStorage) conditions.push(`(p.specs->>'has_expandable_storage')::boolean = true`);
-    if (filters.cameraButton) conditions.push(`(p.specs->>'has_camera_button')::boolean = true`);
+    // Aşağıdaki ikili (var/yok) filtrelerin hepsi "negated" bayrağına
+    // göre YÖN DEĞİŞTİRİYOR — "X olan" isteniyorsa true, "X olmayan"
+    // isteniyorsa false aranıyor.
+    if (filters.nfc) conditions.push(`(p.specs->>'has_nfc')::boolean = ${negated ? 'false' : 'true'}`);
+    if (filters.video8k) conditions.push(`(p.specs->>'video_8k')::boolean = ${negated ? 'false' : 'true'}`);
+    if (filters.satellite) conditions.push(`(p.specs->>'satellite_connectivity')::boolean = ${negated ? 'false' : 'true'}`);
+    if (filters.foldable) conditions.push(`(p.specs->>'is_foldable')::boolean = ${negated ? 'false' : 'true'}`);
+    if (filters.stylus) conditions.push(`(p.specs->>'has_stylus_support')::boolean = ${negated ? 'false' : 'true'}`);
+    if (filters.irBlaster) conditions.push(`(p.specs->>'has_ir_blaster')::boolean = ${negated ? 'false' : 'true'}`);
+    if (filters.faceUnlock) { params.push('Face ID (yüz tanıma)'); conditions.push(`p.specs->>'biometric_unlock' ${negated ? '!=' : '='} $${params.length}`); }
+    if (filters.physicalSim) {
+      conditions.push(negated
+        ? `(p.specs->>'sim_type') = 'Sadece eSIM'`
+        : `(p.specs->>'sim_type') IS DISTINCT FROM 'Sadece eSIM'`);
+    }
+    if (filters.highRefreshRate) conditions.push(`(p.specs->>'refresh_rate_hz')::int ${negated ? '<' : '>='} 120`);
+    if (filters.headphoneJack) conditions.push(`(p.specs->>'has_headphone_jack')::boolean = ${negated ? 'false' : 'true'}`);
+    if (filters.expandableStorage) conditions.push(`(p.specs->>'has_expandable_storage')::boolean = ${negated ? 'false' : 'true'}`);
+    if (filters.cameraButton) conditions.push(`(p.specs->>'has_camera_button')::boolean = ${negated ? 'false' : 'true'}`);
+    // wirelessCharge normalde SOFT bir metrik (en yüksek W'ı maksimize
+    // eder) — ama "kablosuz şarjı OLMAYAN" tam bir "hiç yok" isteği,
+    // düşük-ama-mevcut bir wattaj bu isteği karşılamaz. Negatifse sert
+    // filtreye çeviriyoruz (aşağıda activeSoftKeys'ten de çıkarılıyor).
+    if (filters.wirelessCharge && negated) conditions.push(`(p.specs->>'wireless_charging_watts') IS NULL`);
+    if (colorMatch) {
+      params.push(`%${colorMatch}%`);
+      conditions.push(`EXISTS (SELECT 1 FROM jsonb_array_elements_text(p.specs->'colors') AS col WHERE col ILIKE $${params.length})`);
+    }
 
+    // ALLOWED_SELLERS'ı params'ın SONUNA ekliyoruz (mevcut dinamik
+    // filtrelerin numaralandırmasını bozmadan) ve alt sorgulardaki
+    // JOIN'lerde bu satıcı kısıtlamasını uyguluyoruz — böylece AI'ın
+    // önerdiği fiyat/satıcı/link HER ZAMAN sitede gösterilen üç
+    // satıcıdan (Hepsiburada/Trendyol/Amazon TR) biri oluyor.
+    params.push(ALLOWED_SELLERS);
+    const sellersParamIdx = params.length;
     const { rows: candidates } = await pool.query(
       `SELECT p.id, p.canonical_name, b.name AS brand, p.specs,
-              (SELECT MIN(o.price) FROM offers o WHERE o.product_id = p.id) AS best_price,
+              (SELECT MIN(o.price) FROM offers o JOIN sellers s2 ON s2.id = o.seller_id
+                 WHERE o.product_id = p.id AND s2.name = ANY($${sellersParamIdx}::text[])) AS best_price,
               (SELECT s.name FROM offers o JOIN sellers s ON s.id = o.seller_id
-                 WHERE o.product_id = p.id ORDER BY o.price ASC LIMIT 1) AS best_seller,
-              (SELECT o.affiliate_url FROM offers o
-                 WHERE o.product_id = p.id ORDER BY o.price ASC LIMIT 1) AS best_url
+                 WHERE o.product_id = p.id AND s.name = ANY($${sellersParamIdx}::text[])
+                 ORDER BY o.price ASC LIMIT 1) AS best_seller,
+              (SELECT o.affiliate_url FROM offers o JOIN sellers s3 ON s3.id = o.seller_id
+                 WHERE o.product_id = p.id AND s3.name = ANY($${sellersParamIdx}::text[])
+                 ORDER BY o.price ASC LIMIT 1) AS best_url
        FROM products p
        JOIN brands b ON b.id = p.brand_id
        JOIN categories c ON c.id = p.category_id
        WHERE ${conditions.join(' AND ')}`,
       params
     );
+    // best_price NULL demek: bu ürünün Hepsiburada/Trendyol/Amazon TR
+    // üzerinde HİÇ teklifi yok (satış yok). Burada candidates'tan
+    // ÇIKARMIYORUZ — çünkü kullanıcı ismiyle o modeli sorarsa ("iPhone
+    // 17 Pro" gibi) exact-match'in onu bulup dürüstçe "satışta değil"
+    // demesi gerekiyor; sessizce farklı bir modele kaymak, çözdüğümüz
+    // "iPhone 17 Pro yazınca iPhone 13 mini öneriliyordu" hatasının
+    // aynısını farklı bir yoldan geri getirirdi. Satılamayan ürünler
+    // sadece GENEL (isim aranmayan) öneri havuzundan çıkarılıyor —
+    // aşağıya bakın.
 
     // ESKİDEN belirli bir model adı yazan biri (ör. "iPhone 17 Pro") hiç
     // dikkate alınmıyordu — sadece marka tespit edilip o markanın EN UCUZ
@@ -796,7 +878,16 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
 
     let pool_ = candidates;
     if (exactMatch) {
+      // İsimle arandığında satışta olmasa bile bulunan ÜRÜNÜN KENDİSİ
+      // gösteriliyor — aşağıda best_price null ise "satışta değil"
+      // diye dürüstçe belirtiliyor, farklı bir modele kaymıyoruz.
       pool_ = [exactMatch];
+    } else {
+      // Genel (isim aranmayan: "en güçlü model", "ucuz telefon" gibi)
+      // sorgularda satışta olmayan ürünler öneri havuzuna hiç girmiyor
+      // — kullanıcı özellikle istemediği sürece satın alınamayacak bir
+      // şeyi önermek yanlış olur.
+      pool_ = candidates.filter(c => c.best_price !== null);
     }
     // budgetUnmet: bütçeyi karşılayan HİÇBİR telefon yoksa true olur — bu
     // durumda tüm listeye geri düşülüyor (boş sonuç göstermektense en
@@ -866,8 +957,16 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
       brightScreen: c => c.specs.screen_nits || 0,
       cheap: c => -Number(c.best_price || 0), // negatif: ucuz = yüksek puan
       expensive: c => Number(c.best_price || 0),
+      bigScreen: c => c.specs.screen_inch || 0,
+      smallScreen: c => -(c.specs.screen_inch || 999), // negatif: küçük ekran = yüksek puan
+      highRam: c => c.specs.ram_gb || 0,
+      newest: c => c.specs.release_year || 0,
     };
-    const activeSoftKeys = Object.keys(SOFT_METRICS).filter(k => filters[k]);
+    // wirelessCharge negatifse (yukarıda sert filtreye çevrildi, "hiç
+    // yok" aranıyor) artık bir soft-metrik olarak "en yüksek W" diye
+    // ayrıca puanlanmasın — aksi halde kablosuz şarjı OLMAYAN telefonlar
+    // arasında (hepsi 0 puan alacağından) anlamsız bir tiebreak olurdu.
+    const activeSoftKeys = Object.keys(SOFT_METRICS).filter(k => filters[k] && !(k === 'wirelessCharge' && negated));
 
     if (activeSoftKeys.length === 0 && filters.top) {
       // Tek kriter: ham donanım gücü — nüanslı (ve varsa ücretli AI destekli)
@@ -923,6 +1022,17 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
     }
 
     const pick = pool_[0] || null;
+    // İsimle arandığı için satışta olmasa bile gösterilen bir eşleşme
+    // (bkz. yukarıdaki exactMatch dalı) — Number(null) SESSİZCE 0
+    // verir, bu yüzden normal fiyat formatlama/gerekçe mantığına hiç
+    // girmeden burada ayrı ve dürüst bir yanıt dönüyoruz.
+    if (pick && pick.best_price === null) {
+      return res.json({
+        pick: { id: pick.id, canonical_name: pick.canonical_name, best_price: null, best_seller: null, best_url: null },
+        reasons: ['Aradığın model bulundu', 'Şu an Hepsiburada, Trendyol veya Amazon TR üzerinde satışta değil'],
+        candidates: [],
+      });
+    }
     const reasons = [];
     if (pick) {
       // pg, numeric sütunları JS'e STRING olarak döndürür ("17949.00").
@@ -947,8 +1057,10 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
           ? `Bu bütçede (${filters.minPrice.toLocaleString('tr-TR')} TL üzeri) uygun telefon bulunamadı, en yakın seçenek gösteriliyor: ${bestPriceNum.toLocaleString('tr-TR')} TL`
           : `Belirtilen (${filters.minPrice.toLocaleString('tr-TR')} TL) üzerinde: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
       }
-      if (filters.nfc && pick.specs.has_nfc) reasons.push('NFC destekli');
-      if (filters.wirelessCharge && pick.specs.wireless_charging_watts) reasons.push(`En hızlı kablosuz şarj: ${pick.specs.wireless_charging_watts}W`);
+      if (filters.nfc && negated) reasons.push('NFC desteklemiyor (istediğin gibi)');
+      else if (filters.nfc && pick.specs.has_nfc) reasons.push('NFC destekli');
+      if (filters.wirelessCharge && negated) reasons.push('Kablosuz şarj desteklemiyor (istediğin gibi)');
+      else if (filters.wirelessCharge && pick.specs.wireless_charging_watts) reasons.push(`En hızlı kablosuz şarj: ${pick.specs.wireless_charging_watts}W`);
       if (filters.camera) {
         const parts = [`${pick.specs.main_camera_mp}MP ana kamera`];
         if (pick.specs.ultra_wide_mp) parts.push(`${pick.specs.ultra_wide_mp}MP geniş açı`);
@@ -963,19 +1075,36 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
       if (filters.light && pick.specs.weight_g) reasons.push(`Bu segmentteki en hafif seçeneklerden: ${pick.specs.weight_g}g`);
       if (filters.durable && pick.specs.ip_rating) reasons.push(`Yüksek dayanıklılık sınıfı: ${pick.specs.ip_rating}`);
       if (filters.brightScreen && pick.specs.screen_nits) reasons.push(`Güneş altında bile okunaklı, parlak ekran: ${pick.specs.screen_nits} nit`);
-      if (filters.video8k && pick.specs.video_8k) reasons.push('8K çözünürlükte video kaydı yapabiliyor');
-      if (filters.satellite && pick.specs.satellite_connectivity) reasons.push('Çekim alanı dışında uydu üzerinden acil durum mesajı gönderebiliyor');
-      if (filters.foldable && pick.specs.is_foldable) reasons.push(`Katlanabilir tasarım: ${pick.specs.fold_style}`);
-      if (filters.stylus && pick.specs.has_stylus_support) reasons.push('S Pen ile kullanılabiliyor');
-      if (filters.irBlaster && pick.specs.has_ir_blaster) reasons.push('Kızılötesi (IR) kumanda özelliği var — TV, klima gibi cihazları telefonla yönetebilirsin');
+      if (filters.video8k && negated) reasons.push('8K video kaydı desteklemiyor (istediğin gibi)');
+      else if (filters.video8k && pick.specs.video_8k) reasons.push('8K çözünürlükte video kaydı yapabiliyor');
+      if (filters.satellite && negated) reasons.push('Uydu bağlantısı yok (istediğin gibi)');
+      else if (filters.satellite && pick.specs.satellite_connectivity) reasons.push('Çekim alanı dışında uydu üzerinden acil durum mesajı gönderebiliyor');
+      if (filters.foldable && negated) reasons.push('Katlanabilir değil, klasik tasarım (istediğin gibi)');
+      else if (filters.foldable && pick.specs.is_foldable) reasons.push(`Katlanabilir tasarım: ${pick.specs.fold_style}`);
+      if (filters.stylus && negated) reasons.push('Stylus desteklemiyor (istediğin gibi)');
+      else if (filters.stylus && pick.specs.has_stylus_support) reasons.push('S Pen ile kullanılabiliyor');
+      if (filters.irBlaster && negated) reasons.push('Kızılötesi (IR) kumandası yok (istediğin gibi)');
+      else if (filters.irBlaster && pick.specs.has_ir_blaster) reasons.push('Kızılötesi (IR) kumanda özelliği var — TV, klima gibi cihazları telefonla yönetebilirsin');
       if (filters.faceUnlock && pick.specs.biometric_unlock) reasons.push(`Kilit açma yöntemi: ${pick.specs.biometric_unlock}`);
       if (filters.physicalSim && pick.specs.sim_type) reasons.push(`SIM desteği: ${pick.specs.sim_type}`);
-      if (filters.highRefreshRate && pick.specs.refresh_rate_hz) reasons.push(`Yüksek yenileme hızlı, akıcı ekran: ${pick.specs.refresh_rate_hz}Hz`);
-      if (filters.headphoneJack && pick.specs.has_headphone_jack) reasons.push('3.5mm kulaklık girişi var — kablosuz kulaklığa gerek kalmadan bağlanabiliyorsun');
-      if (filters.expandableStorage && pick.specs.has_expandable_storage) reasons.push('microSD kart ile depolama alanı genişletilebiliyor');
-      if (filters.cameraButton && pick.specs.has_camera_button) reasons.push('Fiziksel kamera düğmesiyle hızlı çekim yapabiliyorsun');
+      if (filters.highRefreshRate && negated && pick.specs.refresh_rate_hz) reasons.push(`Standart yenileme hızlı ekran: ${pick.specs.refresh_rate_hz}Hz`);
+      else if (filters.highRefreshRate && pick.specs.refresh_rate_hz) reasons.push(`Yüksek yenileme hızlı, akıcı ekran: ${pick.specs.refresh_rate_hz}Hz`);
+      if (filters.headphoneJack && negated) reasons.push('Kulaklık girişi yok (istediğin gibi)');
+      else if (filters.headphoneJack && pick.specs.has_headphone_jack) reasons.push('3.5mm kulaklık girişi var — kablosuz kulaklığa gerek kalmadan bağlanabiliyorsun');
+      if (filters.expandableStorage && negated) reasons.push('Hafıza kartı desteklemiyor (istediğin gibi)');
+      else if (filters.expandableStorage && pick.specs.has_expandable_storage) reasons.push('microSD kart ile depolama alanı genişletilebiliyor');
+      if (filters.cameraButton && negated) reasons.push('Fiziksel kamera düğmesi yok (istediğin gibi)');
+      else if (filters.cameraButton && pick.specs.has_camera_button) reasons.push('Fiziksel kamera düğmesiyle hızlı çekim yapabiliyorsun');
       if (filters.cheap && !filters.maxPrice && !filters.minPrice) reasons.push(`Uygun fiyatlı bir seçenek: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
       if (filters.expensive) reasons.push(`Üst segment bir seçenek: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
+      if (filters.bigScreen && pick.specs.screen_inch) reasons.push(`Bu segmentteki en büyük ekranlardan: ${pick.specs.screen_inch}"`);
+      if (filters.smallScreen && pick.specs.screen_inch) reasons.push(`Kompakt, küçük ekran: ${pick.specs.screen_inch}"`);
+      if (filters.highRam && pick.specs.ram_gb) reasons.push(`Yüksek RAM: ${pick.specs.ram_gb}GB`);
+      if (filters.newest && pick.specs.release_year) reasons.push(`En yeni modellerden: ${pick.specs.release_year}`);
+      if (colorMatch && Array.isArray(pick.specs.colors)) {
+        const exactColor = pick.specs.colors.find(c => c.toLowerCase().includes(colorMatch));
+        if (exactColor) reasons.push(`Bu renk seçeneğiyle satılıyor: ${exactColor}`);
+      }
       if (filters.top) {
         const label = topUsedAI ? 'Yapay zeka analizi' : 'Donanım analizi';
         reasons.push(topReasoning
@@ -1094,11 +1223,15 @@ app.get('/sitemap.xml', async (req, res) => {
        JOIN categories c ON c.id = p.category_id
        WHERE c.slug = 'telefon'`
     );
+    // Anasayfa (statik frontend'de barınıyor) ÖNCELİKLE listelenmeli —
+    // önceden sadece ürün sayfaları vardı, arama motorları asıl giriş
+    // noktasını (ana sayfa) bu dosyadan hiç göremiyordu.
+    const homeUrl = `  <url><loc>${FRONTEND_URL}/index.html</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`;
     const urls = rows.map(p =>
-      `  <url><loc>${BACKEND_URL}/urun/${p.id}/${slugify(p.canonical_name)}</loc></url>`
+      `  <url><loc>${BACKEND_URL}/urun/${p.id}/${slugify(p.canonical_name)}</loc><changefreq>daily</changefreq><priority>0.8</priority></url>`
     ).join('\n');
     res.type('application/xml').send(
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls}\n</urlset>\n`
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${homeUrl}\n${urls}\n</urlset>\n`
     );
   } catch (err) {
     console.error(err);
@@ -1150,6 +1283,6 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Cepfiyat API çalışıyor: http://localhost:${PORT}`);
+  console.log(`Makulbul API çalışıyor: http://localhost:${PORT}`);
   runPriceAlertCheck(); // sunucu açılır açılmaz bir kez de hemen çalıştır
 });

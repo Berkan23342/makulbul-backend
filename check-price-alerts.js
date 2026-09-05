@@ -50,7 +50,7 @@ async function checkPriceAlerts(pool, { frontendUrl } = {}) {
       text:
         `${alert.canonical_name} için belirlediğin ${Number(alert.target_price).toLocaleString('tr-TR')} TL hedefine ulaşıldı.\n\n` +
         `Güncel en iyi fiyat: ${currentPrice.toLocaleString('tr-TR')} TL (${bestOfferRows[0].seller_name})\n\n` +
-        `Cepfiyat'ta incele: ${FRONTEND_URL}/index.html`,
+        `Makulbul'ta incele: ${FRONTEND_URL}/index.html`,
     });
 
     // Tek seferlik bildirim — tekrar spam olmasın diye alarmı pasifleştir
