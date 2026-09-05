@@ -29,6 +29,19 @@ function esc(str) {
   ));
 }
 
+// server.js artık ingest sırasında http(s) dışı URL'leri reddediyor,
+// ama bu render katmanında ikinci bir savunma satırı — esc() sadece
+// HTML özel karakterlerini kaçırır, "javascript:..." gibi bir şemayı
+// engellemez, o yüzden href'e basmadan önce ayrıca şema kontrolü yapılır.
+function safeHref(url) {
+  try {
+    const u = new URL(url);
+    return (u.protocol === 'http:' || u.protocol === 'https:') ? esc(url) : '#';
+  } catch {
+    return '#';
+  }
+}
+
 function fmtTL(n) {
   return Number(n).toLocaleString('tr-TR') + ' TL';
 }
@@ -37,6 +50,7 @@ const SPEC_LABELS = [
   ['ram_gb', 'RAM', v => `${v} GB`],
   ['storage_gb', 'Depolama', v => `${v} GB`],
   ['screen_inch', 'Ekran', v => `${v}"`],
+  ['refresh_rate_hz', 'Ekran Yenileme Hızı', v => `${v}Hz`],
   ['battery_mah', 'Batarya', v => `${v} mAh`],
   ['chip', 'Çip', v => v],
   ['main_camera_mp', 'Ana Kamera', v => `${v} MP`],
@@ -50,6 +64,17 @@ const SPEC_LABELS = [
   ['wireless_charging_watts', 'Kablosuz Şarj', v => `${v}W`],
   ['has_nfc', 'NFC', v => (v ? 'Var' : 'Yok')],
   ['has_5g', '5G', v => (v ? 'Var' : 'Yok')],
+  ['screen_nits', 'Ekran Parlaklığı', v => `${v} nit`],
+  ['build_material', 'Gövde Malzemesi', v => v],
+  ['has_stereo_speakers', 'Stereo Hoparlör', v => (v ? 'Var' : 'Yok')],
+  ['biometric_unlock', 'Kilit Açma Yöntemi', v => v],
+  ['is_foldable', 'Katlanabilir', v => (v ? 'Evet' : 'Hayır')],
+  ['fold_style', 'Katlama Tipi', v => v],
+  ['has_stylus_support', 'Kalem (Stylus) Desteği', v => (v ? 'Var' : 'Yok')],
+  ['sim_type', 'SIM Desteği', v => v],
+  ['has_ir_blaster', 'Kızılötesi (IR) Kumanda', v => (v ? 'Var' : 'Yok')],
+  ['video_8k', '8K Video Kaydı', v => (v ? 'Var' : 'Yok')],
+  ['satellite_connectivity', 'Uydu Bağlantısı', v => (v ? 'Var' : 'Yok')],
   ['release_year', 'Çıkış Yılı', v => v],
 ];
 
@@ -166,19 +191,22 @@ ${renderNav(frontendUrl)}
 }
 
 // Fiyat alarmı onay linkine tıklanınca gösterilen basit sonuç sayfası.
-function renderVerifyPage({ success, message, frontendUrl }) {
+function renderVerifyPage({ success, message, frontendUrl, pageTitle, heading, cancelUrl }) {
+  const titleText = pageTitle || (success ? 'Alarm onaylandı' : 'Onay başarısız');
+  const headingText = heading || (success ? '✓ Fiyat alarmın onaylandı' : 'Onay bağlantısı geçersiz');
   return `<!doctype html>
 <html lang="tr"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${success ? 'Alarm onaylandı' : 'Onay başarısız'} — Cepfiyat</title>
+<title>${esc(titleText)} — Cepfiyat</title>
 <meta name="robots" content="noindex">
 ${FAVICON_LINK}
 <style>${PAGE_STYLE}</style>
 </head><body>
 ${renderNav(frontendUrl)}
 <div class="wrap not-found">
-  <h1>${success ? '✓ Fiyat alarmın onaylandı' : 'Onay bağlantısı geçersiz'}</h1>
+  <h1>${esc(headingText)}</h1>
   <p class="muted">${esc(message)}</p>
+  ${cancelUrl ? `<p class="muted" style="margin-top:16px">Fikrini değiştirirsen: <a href="${esc(cancelUrl)}">bu alarmı iptal et</a></p>` : ''}
   <a class="back-link" href="${frontendUrl}/index.html#catalog">← Tüm modellere dön</a>
 </div>
 </body></html>`;
@@ -209,7 +237,7 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
           <span class="offer-seller">${esc(o.seller_name)}</span>
           <span class="offer-price">${fmtTL(o.price)}</span>
         </div>
-        <a class="offer-buy" href="${esc(o.affiliate_url)}" target="_blank" rel="nofollow sponsored noopener">Satıcıya Git <span class="ad-tag">Reklam</span></a>
+        <a class="offer-buy" href="${safeHref(o.affiliate_url)}" target="_blank" rel="nofollow sponsored noopener">Satıcıya Git <span class="ad-tag">Reklam</span></a>
       </div>
       ${o.installments ? `<div class="offer-installments">${o.installments.map(i => `${i.months} x ${fmtTL(i.monthlyAmount)}`).join(' · ')}</div>` : ''}
     </div>`).join('');
@@ -243,6 +271,11 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
 <meta property="og:title" content="${esc(title)}">
 <meta property="og:description" content="${esc(description)}">
 <meta property="og:url" content="${canonicalUrl}">
+<meta property="og:image" content="${backendUrl}/og-image.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="${esc(title)}">
+<meta name="twitter:description" content="${esc(description)}">
+<meta name="twitter:image" content="${backendUrl}/og-image.png">
 ${best ? `<meta property="product:price:amount" content="${Number(best.price)}"><meta property="product:price:currency" content="TRY">` : ''}
 <meta name="theme-color" content="#0a0a0e">
 ${FAVICON_LINK}
@@ -290,6 +323,13 @@ ${renderNav(frontendUrl)}
   var API_BASE = ${JSON.stringify(backendUrl)};
   var fmt = function(n){ return Number(n).toLocaleString('tr-TR') + ' TL'; };
   var fmtDate = function(d){ return new Date(d).toLocaleDateString('tr-TR', {day:'numeric', month:'short', year:'numeric'}); };
+
+  // Birinci taraf, kimliksiz sayfa görüntüleme sayacı
+  fetch(API_BASE + '/api/track', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ path: location.pathname }),
+  }).catch(function(){});
 
   fetch(API_BASE + '/api/products/${product.id}/price-history?days=90')
     .then(function(r){ return r.json(); })

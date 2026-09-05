@@ -96,19 +96,41 @@ En kolay ücretsiz seçenekler:
 - **Render.com** — GitHub reponu bağlarsın, otomatik build+deploy eder.
 - **Railway.app** — benzer, GitHub bağlantılı otomatik deploy.
 
-İkisinde de yapman gereken tek şey: `DATABASE_URL` ve `DB_SSL` ortam
-değişkenlerini o platformun ayarlarına (Environment Variables) elle girmek —
-`.env` dosyası deploy edilmez, her platformda bu bilgiyi ayrıca girersin.
+`.env` dosyası deploy edilmez (`.gitignore`'da) — bu yüzden aşağıdaki
+değişkenlerin **hepsini** o platformun "Environment Variables" ayarına
+elle girmen gerekiyor. Sadece `DATABASE_URL`/`DB_SSL` girip diğerlerini
+atlarsan site **çalışmaz** — CORS, gerçek frontend adresini bilmediği
+için tüm API isteklerini reddeder.
 
-## 8. index.html'i backend'e bağlama (sıradaki adım)
+**Zorunlu:**
 
-Şu anki site verideki 12 telefonu kod içinde sabit (`const PHONES = [...]`)
-tutuyor. Backend hazır olduğunda bu satırı, sayfa açıldığında
-`fetch('http://localhost:3000/api/products')` ile veritabanından veri çeken
-bir yapıya çevirmemiz gerekiyor — bunu istersen bir sonraki adımda birlikte
-yapalım.
+| Değişken | Ne işe yarar |
+|---|---|
+| `DATABASE_URL`, `DB_SSL` | Veritabanı bağlantısı (bkz. madde 3) |
+| `FRONTEND_URL` | Siteni nereye deploy ettiysen o adres (örn. `https://cepfiyat.com`). CORS **sadece** bu adrese izin verir — yanlış/eksikse site tamamen açılmaz. |
+| `BACKEND_URL` | Backend'in kendi canlı adresi (örn. `https://cepfiyat-api.onrender.com`). Ürün sayfaları, sitemap.xml ve e-posta onay linkleri bunu kullanır. |
+| `NODE_ENV` | `production` yaz — http→https yönlendirmesi ve HSTS güvenlik başlığı ancak o zaman devreye girer. |
 
-## 9. Otomatik ürün eşleştirmeyi test et
+**Opsiyonel (boş bırakılırsa ilgili özellik "ücretsiz/stub" modda çalışmaya devam eder):**
+
+| Değişken | Ne işe yarar |
+|---|---|
+| `RESEND_API_KEY`, `ALERT_FROM_EMAIL` | Fiyat alarmı e-postalarının **gerçekten** gönderilmesi için (resend.com). Boşsa e-posta gönderilmez, ne gönderileceği sadece sunucu loguna yazılır. |
+| `ANTHROPIC_API_KEY` | "En güçlü model" aramasını Claude'a soydurmak için — ücretsiz çip+RAM yöntemi zaten var, bu tamamen opsiyonel bir yükseltme (madde 10). |
+| `STATS_KEY` | `GET /api/stats`'ı (birinci taraf ziyaret istatistikleri) herkese açık bırakmamak için bir parola. |
+
+Ayrıntılı açıklamalar ve örnek değerler için `.env.example` dosyasına bak.
+
+**Frontend'i de ayrıca deploy etmen lazım** (backend'den bağımsız statik
+bir site) — Netlify, Vercel veya Cloudflare Pages ile `cepfiyat-frontend/`
+klasörünü yayınlayabilirsin. Deploy ettikten sonra `index.html`'deki
+`const API_BASE = 'http://localhost:3000';` satırını gerçek backend
+adresinle (`BACKEND_URL` ile aynı değer) değiştirmeyi **unutma** — hem bu
+satırı hem de `<meta http-equiv="Content-Security-Policy">` içindeki
+`connect-src`'i güncellemen gerekiyor, aksi halde site "Ürünler
+yüklenemedi" hatası verir.
+
+## 8. Otomatik ürün eşleştirmeyi test et
 
 Bu, farklı satıcılardaki farklı isimli aynı ürünleri otomatik olarak aynı
 `product_id`'ye bağlayan motordur (`match-product.js`).
@@ -120,9 +142,14 @@ node test-match.js
 
 Bu, veritabanındaki gerçek ürünlere karşı birkaç örnek ham başlık dener ve
 her biri için hangi karara vardığını (`matched` / `needs_review` /
-`new_candidate`) ve benzerlik skorunu ekrana yazar.
+`new_candidate`) ve benzerlik skorunu ekrana yazar. **Güvenli**: tüm
+işlemler tek bir transaction içinde yapılıp sonunda geri alınır (ROLLBACK)
+— veritabanına hiçbir kalıcı iz bırakmaz, canlı veritabanına karşı bile
+tekrar tekrar çalıştırabilirsin.
 
-**API üzerinden test (sunucu çalışırken, başka bir terminalde):**
+**API üzerinden gerçek bir teklif eklemek istersen** (bu, `test-match.js`'in
+aksine **kalıcı** yazar — sadece gerçek bir teklifi girmek/güncellemek
+istediğinde kullan):
 ```bash
 curl -X POST http://localhost:3000/api/ingest-offer \
   -H "Content-Type: application/json" \
@@ -130,18 +157,18 @@ curl -X POST http://localhost:3000/api/ingest-offer \
     "sellerName": "Trendyol",
     "rawTitle": "Apple iPhone 17 256 GB Mavi Cep Telefonu",
     "price": 84500,
-    "productUrl": "https://www.trendyol.com/ornek-urun"
+    "productUrl": "https://www.trendyol.com/gercek-urun-linki-buraya"
   }'
 ```
 
-Cevapta `"status": "matched"` ve doğru `productId`'yi görmen lazım — bu,
-sistemin bu ham başlığı doğru kanonik ürüne bağladığı anlamına gelir ve
-`offers` tablosuna yeni bir satır eklenmiş olur.
+`productUrl` gerçek olmayan (örn. `example.com`) bir adres verirsen, o
+sahte adres kalıcı olarak `offers` tablosuna yazılır ve gerçek kullanıcılara
+"Satıcıya Git" linki olarak gösterilir — mutlaka gerçek bir satıcı linki
+kullan. Cevapta `"status": "matched"` ve doğru `productId`'yi görmen
+lazım. Aynı satıcı+ürün için tekrar çağırırsan yeni satır **eklemez**,
+mevcut fiyatı günceller (`ON CONFLICT ... DO UPDATE`).
 
-`SELECT * FROM offers ORDER BY created_at DESC LIMIT 1;` ile pgAdmin'den
-bu yeni eklenen teklifi görebilirsin.
-
-## 10. "En güçlü model" araması artık çip+RAM'i birlikte değerlendiriyor (ücretsiz)
+## 9. "En güçlü model" araması artık çip+RAM'i birlikte değerlendiriyor (ücretsiz)
 
 Daha önce bu arama sadece RAM miktarına bakıyordu. Artık `chip-tiers.js`
 dosyasındaki bilinen çip güç puanlarıyla (Snapdragon 8 Elite Gen 5,
@@ -162,16 +189,39 @@ opsiyonel; anahtar eklemezsen sistem yukarıdaki ücretsiz yöntemle sorunsuz
 çalışmaya devam eder.
 
 
-## 11. Özellik tablosunu genişlet (ağırlık, su geçirmezlik, şarj hızı, kamera detayı)
+## 10. Özellik tablosunu genişletmek istersen (ağırlık, su geçirmezlik, şarj hızı, kamera detayı)
 
-pgAdmin'de yeni bir sorgu sekmesi aç, `products-update-specs.sql` dosyasının
-içeriğini yapıştır, çalıştır. Bu, mevcut 12 ürünün üzerine gerçek/doğrulanmış
-yeni özellik alanları ekler (ağırlık, IP derecesi, kablolu/kablosuz şarj
-gücü, ön/geniş açı/telefoto kamera çözünürlükleri) — hepsi Apple/Samsung/
-Xiaomi'nin resmi sayfalarından derlendi.
+`products.specs` bir JSONB kolonu — yeni bir özellik eklemek için ilgili
+ürünün specs alanına `UPDATE products SET specs = specs || '{"weight_g": 187}' WHERE id = '...'`
+gibi bir sorguyla istediğin alanı ekleyebilir/güncelleyebilirsin.
+Backend'i yeniden başlatmana gerek yok — veri her istekte taze çekiliyor,
+sadece tarayıcıda sayfayı yenile (Cmd+R).
 
-Bunu çalıştırdıktan sonra backend'i yeniden başlatmana gerek yok — veri
-her istekte veritabanından taze çekiliyor. Sadece tarayıcıda sayfayı
-yenile (Cmd+R) ve "Hafif · Kompakt", "Hızlı Şarj" veya "Kablosuz Şarj"
-gibi yeni etiketleri dene. Karşılaştırma penceresinde de artık ağırlık,
-su/toz direnci ve şarj hızlarını yan yana görebilirsin.
+Şu an desteklenen/kullanılan alanlar: `ram_gb`, `storage_gb`, `screen_inch`,
+`battery_mah`, `chip`, `main_camera_mp`, `ultra_wide_mp`, `telephoto_mp`,
+`optical_zoom_x`, `front_camera_mp`, `weight_g`, `ip_rating`,
+`wired_charging_watts`, `wireless_charging_watts`, `has_nfc`, `has_5g`,
+`release_year`.
+
+## 11. Diğer önemli özellikler (kısa özet)
+
+Zamanla eklenen ve koddaki yorumlarda ayrıntısı olan, ama başka yerde
+belgelenmemiş özellikler:
+
+- **Ürün detay sayfaları + SEO** (`product-page.js`, `GET /urun/:id/:slug`) —
+  her ürün için sunucu tarafında render edilmiş (SSR), gerçek meta
+  etiketleri ve JSON-LD içeren bir sayfa. `GET /sitemap.xml` ve
+  `GET /robots.txt` da bunun için var.
+- **Fiyat düşüş alarmı** (`GET/POST /api/price-alerts*`, `check-price-alerts.js`,
+  `email.js`) — e-posta onayı (double opt-in) gerektirir, sunucu saatte
+  bir otomatik kontrol eder, `RESEND_API_KEY` yoksa "stub" modda (konsola
+  yazarak) çalışır.
+- **Taksit hesaplama** (`installments.js`) — sadece belirli satıcılarda,
+  BDDK'nın telefon/elektronikte taksiti 6 ay ile sınırlayan düzenlemesine
+  uygun (3/6 ay).
+- **Birinci taraf, kimliksiz kullanım istatistiği** (`POST /api/track`,
+  `GET /api/stats`) — dış bir analitik hesabı gerektirmez.
+- **Güvenlik**: rate limiting (`rate-limit.js`), CORS kısıtlaması, CSP +
+  diğer güvenlik başlıkları, tüm satıcı URL'lerinin http(s) şema kontrolü
+  (hem `POST /api/ingest-offer`'da hem de `match-product.js`'in kendisinde
+  — iki katmanlı savunma).

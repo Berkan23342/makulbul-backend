@@ -3,6 +3,15 @@
 //
 // Bu, sohbette gösterdiğimiz "Trendyol'dan / Hepsiburada'dan farklı isimli
 // aynı ürün" senaryosunu gerçekten veritabanına karşı çalıştırır.
+//
+// GÜVENLİ: Tüm testler TEK BİR TRANSACTION içinde çalışır ve sonunda
+// ROLLBACK edilir — veritabanına HİÇBİR KALICI DEĞİŞİKLİK YAZILMAZ.
+// (Önceden bu script sahte bir "https://example.com/test" URL'sini
+// gerçek offers tablosuna kalıcı olarak yazıyordu — hatta offers artık
+// ON CONFLICT ile "upsert" yaptığı için, aynı satıcı+ürün için zaten var
+// olan GERÇEK bir teklifin üzerine bile yazabiliyordu. Bu, canlıya
+// alındıktan sonra biri "bir şeyi test edeyim" diye bu scripti çalıştırsa
+// gerçek kullanıcı verisini bozardı — ROLLBACK ile bu artık imkansız.)
 
 require('dotenv').config();
 const { Pool } = require('pg');
@@ -22,31 +31,43 @@ const TEST_CASES = [
 ];
 
 async function main() {
-  console.log('--- Eşleştirme testi başlıyor ---\n');
+  console.log('--- Eşleştirme testi başlıyor (sonunda ROLLBACK edilecek, kalıcı yazma yok) ---\n');
 
-  for (const test of TEST_CASES) {
-    const { rows: sellerRows } = await pool.query(
-      'SELECT id FROM sellers WHERE name = $1', [test.sellerName]
-    );
-    if (sellerRows.length === 0) {
-      console.log(`✘ Satıcı bulunamadı: ${test.sellerName} (sellers-seed atlandı mı?)\n`);
-      continue;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    for (const test of TEST_CASES) {
+      const { rows: sellerRows } = await client.query(
+        'SELECT id FROM sellers WHERE name = $1', [test.sellerName]
+      );
+      if (sellerRows.length === 0) {
+        console.log(`✘ Satıcı bulunamadı: ${test.sellerName} (sellers-seed atlandı mı?)\n`);
+        continue;
+      }
+
+      const result = await matchProduct(client, {
+        rawTitle: test.rawTitle,
+        sellerId: sellerRows[0].id,
+        price: test.price,
+        productUrl: 'https://example.com/cepfiyat-test-match-script',
+      });
+
+      console.log(`Ham başlık : "${test.rawTitle}"`);
+      console.log(`Satıcı     : ${test.sellerName}`);
+      console.log(`Sonuç      :`, result);
+      console.log('---');
     }
 
-    const result = await matchProduct(pool, {
-      rawTitle: test.rawTitle,
-      sellerId: sellerRows[0].id,
-      price: test.price,
-      productUrl: 'https://example.com/test',
-    });
-
-    console.log(`Ham başlık : "${test.rawTitle}"`);
-    console.log(`Satıcı     : ${test.sellerName}`);
-    console.log(`Sonuç      :`, result);
-    console.log('---');
+    await client.query('ROLLBACK');
+    console.log('\n✔ Test bitti. Yukarıdaki sonuçlar doğru ama ROLLBACK edildiği için veritabanında hiçbir iz kalmadı.');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+    await pool.end();
   }
-
-  await pool.end();
 }
 
 main().catch(err => {

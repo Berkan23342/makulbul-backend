@@ -21,15 +21,26 @@ const NOISE_PHRASES = [
   'kutulu', 'faturalı', '(yenilenmiş)', 'yenilenmiş',
 ];
 
+// Uzun (bileşik) ifadeler önce, kısa/tek kelimelik olanlar sonra
+// işlenmeli — aksi halde örn. "gold" önce silinirse "rose gold" bir
+// daha hiç eşleşmez, geriye anlamsız "rose" kalır (gerçek bir hatayı
+// test ederek bulduk: "Rose Gold" ve "Doğal Titanyum" girdileri
+// normalize sonrası "rose"/"doğal" kelimesini kirli veri olarak
+// bırakıyordu, bu da benzerlik eşleştirmesinin isabetini düşürüyordu).
+// Uzunluğa göre azalan sıralama, listeye ileride hangi sırayla kelime
+// eklenirse eklensin bu sınıf hatayı kalıcı olarak önler.
+const NOISE_PHRASES_SORTED = [...NOISE_PHRASES].sort((a, b) => b.length - a.length);
+const COLOR_WORDS_SORTED = [...COLOR_WORDS].sort((a, b) => b.length - a.length);
+
 function normalizeTitle(rawTitle) {
   let s = ' ' + rawTitle.toLowerCase() + ' ';
 
   // Önce çok kelimeli marketing ifadelerini sil
-  for (const phrase of NOISE_PHRASES) {
+  for (const phrase of NOISE_PHRASES_SORTED) {
     s = s.split(phrase).join(' ');
   }
   // Renk kelimelerini sil (kelime sınırlarına dikkat ederek)
-  for (const color of COLOR_WORDS) {
+  for (const color of COLOR_WORDS_SORTED) {
     const re = new RegExp(`\\b${color}\\b`, 'g');
     s = s.replace(re, ' ');
   }

@@ -72,19 +72,28 @@ async function rankByPower(candidates) {
   }
 }
 
-// Ücretsiz, yerel yöntem: çip puanı (ağırlıklı) + RAM + (eşitlik bozucu
-// olarak) batarya kapasitesi birlikte skorlanır.
+// Tek bir adayın donanım gücü puanını hesaplar (çip ağırlıklı + RAM +
+// batarya eşitlik bozucu). server.js'deki /api/ai-search, birden fazla
+// kriter aynı anda istendiğinde (örn. "güçlü ve hafif bir telefon") bu
+// puanı diğer kriterlerle harmanlamak için doğrudan kullanır — sadece
+// "en güçlü telefon" gibi TEK kriterli sorgularda ücretli/nüanslı
+// rankByPower() (ve varsa AI) yolu devreye girer.
+function computeHardwareScore(candidate) {
+  const chipScore = scoreChip(candidate.specs.chip);
+  const ramScore = candidate.specs.ram_gb || 0;
+  const batteryTiebreak = (candidate.specs.battery_mah || 0) / 1000;
+  // Çip puanı 0-100 aralığında ve baskın faktör; RAM ince ayar olarak
+  // ekleniyor; batarya ise aynı çip+RAM'e sahip modeller arasında
+  // (örn. iPhone 17 Pro vs Pro Max) mantıklı bir eşitlik bozucu —
+  // daha büyük gövde/batarya genelde daha üst segmenti işaret eder.
+  return chipScore * 10 + ramScore + batteryTiebreak;
+}
+
+// Ücretsiz, yerel yöntem: computeHardwareScore()'a göre sıralar.
 function freeRank(candidates) {
   const scored = candidates.map(c => {
-    const chipScore = scoreChip(c.specs.chip);
-    const ramScore = c.specs.ram_gb || 0;
-    const batteryTiebreak = (c.specs.battery_mah || 0) / 1000;
-    // Çip puanı 0-100 aralığında ve baskın faktör; RAM ince ayar olarak
-    // ekleniyor; batarya ise aynı çip+RAM'e sahip modeller arasında
-    // (örn. iPhone 17 Pro vs Pro Max) mantıklı bir eşitlik bozucu —
-    // daha büyük gövde/batarya genelde daha üst segmenti işaret eder.
-    const totalScore = chipScore * 10 + ramScore + batteryTiebreak;
-    return { ...c, _score: totalScore, _chipScore: chipScore };
+    const totalScore = computeHardwareScore(c);
+    return { ...c, _score: totalScore };
   });
 
   scored.sort((a, b) => b._score - a._score);
@@ -97,4 +106,4 @@ function freeRank(candidates) {
   return { ranking: scored.map(c => c.id), reasoning, usedAI: false };
 }
 
-module.exports = { rankByPower };
+module.exports = { rankByPower, computeHardwareScore };

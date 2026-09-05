@@ -4,27 +4,120 @@
 
 require('dotenv').config();
 const crypto = require('crypto');
+const path = require('path');
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
 
+// Beklenmedik bir hata (örn. bir yerde unutulmuş bir .catch() eksikliği)
+// tüm süreci çökertip sitedeki HERKESİ etkilemesin diye son bir güvenlik
+// ağı — loglar, süreci ayakta tutar. Asıl düzeltme her zaman hatanın
+// kaynağını bulup gidermektir, bu sadece bir arıza toleransı katmanıdır.
+process.on('unhandledRejection', (reason) => {
+  console.error('✘ Yakalanmamış promise reddi:', reason);
+});
+
 const { matchProduct } = require('./match-product');
-const { rankByPower } = require('./ai-rank');
+const { rankByPower, computeHardwareScore } = require('./ai-rank');
 const { getInstallmentOptions } = require('./installments');
 const { renderProductPage, renderNotFoundPage, renderVerifyPage, slugify } = require('./product-page');
 const { sendEmail } = require('./email');
 const { checkPriceAlerts } = require('./check-price-alerts');
+const { createRateLimiter } = require('./rate-limit');
 
 // Ürün detay sayfalarının (SSR) ve sitemap'in mutlak URL üretmesi için.
 // Canlıya alınca .env'e gerçek domain'leri yazman yeterli.
 const BACKEND_URL = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3000}`;
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5500';
 
+const IS_PROD = process.env.NODE_ENV === 'production';
+
 const app = express();
+// Render/Railway gibi platformlarda sunucu bir ters proxy'nin arkasında
+// çalışır — bu olmadan req.ip her zaman proxy'nin adresini gösterir ve
+// aşağıdaki IP bazlı rate limit'ler işe yaramaz.
+app.set('trust proxy', 1);
+
+// Canlıda (NODE_ENV=production) http ile gelen isteği https'e yönlendir.
+// Yerelde (http, proxy yok) bu adım atlanır.
+if (IS_PROD) {
+  app.use((req, res, next) => {
+    if (req.secure || req.get('x-forwarded-proto') === 'https') return next();
+    res.redirect(301, `https://${req.get('host')}${req.originalUrl}`);
+  });
+}
+
 // CORS artık sadece bilinen frontend origin'ine izin veriyor — eskiden
 // cors() hiçbir kısıtlama olmadan her origin'e açıktı.
 app.use(cors({ origin: FRONTEND_URL }));
-app.use(express.json());
+// Boyut sınırı açıkça belirtildi — varsayılan zaten 100kb ama niyeti
+// koda yazmak, ileride biri "limit yok" sanıp değiştirmesin diye.
+app.use(express.json({ limit: '100kb' }));
+
+// Temel güvenlik başlıkları — ek bağımlılık (helmet vb.) eklemeden
+// tarayıcı seviyesinde birkaç yaygın saldırı sınıfını (clickjacking,
+// MIME sniffing, referrer sızıntısı, harici script/kaynak yükleme)
+// engeller. Sayfalar inline <style>/<script> kullandığı için CSP
+// 'unsafe-inline' ile — bu yine de sayfaya YABANCI bir origin'den
+// script/kaynak yüklenmesini engeller, sadece sayfanın kendi inline
+// kodunu serbest bırakır.
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=()');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'self'; " +
+    "script-src 'self' 'unsafe-inline'; " +
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+    "font-src https://fonts.gstatic.com; " +
+    "img-src 'self' data:; " +
+    "connect-src 'self' " + FRONTEND_URL + "; " +
+    "frame-ancestors 'none'; " +
+    "base-uri 'none'; " +
+    "form-action 'self'"
+  );
+  if (req.secure) {
+    res.setHeader('Strict-Transport-Security', 'max-age=63072000; includeSubDomains');
+  }
+  next();
+});
+
+// ---------------------------------------------------------------------
+// Oran sınırlayıcılar (spam/kötüye kullanım koruması)
+// ---------------------------------------------------------------------
+const priceAlertIpLimiter = createRateLimiter({
+  windowMs: 60 * 60 * 1000, // 1 saat
+  max: 5,
+  keyFn: req => req.ip,
+  message: 'Çok fazla fiyat alarmı isteği gönderdin, bir saat sonra tekrar dene.',
+});
+const priceAlertEmailLimiter = createRateLimiter({
+  windowMs: 24 * 60 * 60 * 1000, // 24 saat
+  max: 5,
+  // e-posta bazlı: aynı adres, farklı IP'lerden hedeflense bile korunsun
+  keyFn: req => (req.body?.email || '').toLowerCase().trim(),
+  message: 'Bu e-posta adresi için çok fazla alarm isteği oluşturuldu, yarın tekrar dene.',
+});
+const verifyLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 30,
+  keyFn: req => req.ip,
+  message: 'Çok fazla istek, biraz sonra tekrar dene.',
+});
+const aiSearchLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 20,
+  keyFn: req => req.ip,
+  message: 'Çok fazla arama isteği gönderdin, biraz yavaşla.',
+});
+const ingestLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: 60, // scraper'lar toplu çalışabildiği için daha yüksek limit
+  keyFn: req => req.ip,
+  message: 'Çok fazla istek, biraz sonra tekrar dene.',
+});
 
 // ---------------------------------------------------------------------
 // Veritabanı bağlantısı
@@ -161,6 +254,65 @@ app.get('/api/products/:id/price-history', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------
+// POST /api/track — birinci taraf, kimliksiz sayfa görüntüleme sayacı.
+// Çerez banner'ı "kullanım istatistiği için çerez kullanır" diyordu
+// ama arkasında hiçbir şey yoktu. Bu, dış bir analitik hesabı (GA4 vb.)
+// gerektirmeden, IP veya başka bir kimlik saklamadan (sadece hangi
+// sayfa, ne zaman) temel kullanım verisi tutar.
+// Body: { path }
+// ---------------------------------------------------------------------
+const trackLimiter = createRateLimiter({
+  windowMs: 60 * 1000, max: 60, keyFn: req => req.ip,
+});
+
+app.post('/api/track', trackLimiter, async (req, res) => {
+  try {
+    const path = String(req.body?.path || '').slice(0, 300);
+    if (!path) return res.status(400).json({ error: 'path zorunludur' });
+    await pool.query(
+      `INSERT INTO page_views (path, referrer) VALUES ($1, $2)`,
+      [path, req.get('referer') || null]
+    );
+    res.status(204).end();
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Kaydedilemedi' });
+  }
+});
+
+// ---------------------------------------------------------------------
+// GET /api/stats — toplam ve son 30 günlük görüntüleme istatistikleri.
+// Veri kimliksiz/toplu olsa da trafik/iş bilgisini herkese açık
+// bırakmamak için, .env'de STATS_KEY tanımlıysa ?key= ile eşleşmeyen
+// istekler reddedilir. STATS_KEY tanımlı değilse (yerel geliştirme)
+// endpoint açık kalır.
+// ---------------------------------------------------------------------
+app.get('/api/stats', async (req, res) => {
+  if (process.env.STATS_KEY && req.query.key !== process.env.STATS_KEY) {
+    return res.status(403).json({ error: 'Yetkisiz' });
+  }
+  try {
+    const { rows: totalRows } = await pool.query(`SELECT COUNT(*) AS total FROM page_views`);
+    const { rows: last30 } = await pool.query(`
+      SELECT date_trunc('day', created_at)::date AS date, COUNT(*) AS views
+      FROM page_views
+      WHERE created_at >= NOW() - INTERVAL '30 days'
+      GROUP BY date ORDER BY date ASC
+    `);
+    const { rows: topPaths } = await pool.query(`
+      SELECT path, COUNT(*) AS views
+      FROM page_views
+      WHERE created_at >= NOW() - INTERVAL '30 days'
+      GROUP BY path ORDER BY views DESC LIMIT 20
+    `);
+    res.json({ totalViews: Number(totalRows[0].total), last30Days: last30, topPaths });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'İstatistikler getirilemedi' });
+  }
+});
+
+// ---------------------------------------------------------------------
 // POST /api/price-alerts — fiyat düşüş alarmı oluşturur (e-posta onayı
 // gerektirir). Body: { productId, email, targetPrice }
 //
@@ -173,18 +325,18 @@ app.get('/api/products/:id/price-history', async (req, res) => {
 // ---------------------------------------------------------------------
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-app.post('/api/price-alerts', async (req, res) => {
+app.post('/api/price-alerts', priceAlertIpLimiter, priceAlertEmailLimiter, async (req, res) => {
   try {
     const { productId, email, targetPrice } = req.body;
 
     if (!productId || !email || !targetPrice) {
       return res.status(400).json({ error: 'productId, email ve targetPrice zorunludur' });
     }
-    if (!EMAIL_RE.test(email)) {
+    if (typeof email !== 'string' || email.length > 254 || !EMAIL_RE.test(email)) {
       return res.status(400).json({ error: 'Geçerli bir e-posta adresi gir' });
     }
     const target = Number(targetPrice);
-    if (!Number.isFinite(target) || target <= 0) {
+    if (!Number.isFinite(target) || target <= 0 || target > 10_000_000) {
       return res.status(400).json({ error: 'Hedef fiyat geçerli bir sayı olmalı' });
     }
 
@@ -195,24 +347,30 @@ app.post('/api/price-alerts', async (req, res) => {
 
     const verifyToken = crypto.randomBytes(24).toString('hex');
 
-    const { rows } = await pool.query(
+    await pool.query(
       `INSERT INTO price_alerts (product_id, email, target_price, verify_token)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, product_id, email, target_price, created_at`,
+       VALUES ($1, $2, $3, $4)`,
       [productId, email, target, verifyToken]
     );
 
     const verifyUrl = `${BACKEND_URL}/api/price-alerts/verify?token=${verifyToken}`;
+    const cancelUrl = `${BACKEND_URL}/api/price-alerts/cancel?token=${verifyToken}`;
     await sendEmail({
       to: email,
       subject: `Fiyat alarmını onayla — ${productRows[0].canonical_name}`,
       text:
         `${productRows[0].canonical_name} için ${target.toLocaleString('tr-TR')} TL hedefiyle bir fiyat alarmı kurdun.\n\n` +
         `Bu alarmı aktif etmek için onayla:\n${verifyUrl}\n\n` +
-        `Bu isteği sen yapmadıysan bu e-postayı yok sayabilirsin — onaylamadığın sürece hiçbir bildirim gönderilmeyecek.`,
+        `Bu isteği sen yapmadıysan bu e-postayı yok sayabilirsin — onaylamadığın sürece hiçbir bildirim gönderilmeyecek.\n\n` +
+        `Bu e-postayı sakla — alarmını daha sonra iptal etmek istersen şu linki kullanabilirsin:\n${cancelUrl}`,
     });
 
-    res.status(201).json({ ...rows[0], needsVerification: true });
+    // Frontend zaten sadece başarı/hata durumunu kontrol ediyor, kendi
+    // gönderdiği email/targetPrice'ı zaten biliyor — veritabanının
+    // internal id'sini veya kaydı olduğu gibi geri döndürmenin bir
+    // faydası yok, gereksiz bilgi ifşası (kullanıcının kendi verisi
+    // olsa da minimum ifşa ilkesi).
+    res.status(201).json({ needsVerification: true });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Alarm oluşturulamadı' });
@@ -222,7 +380,7 @@ app.post('/api/price-alerts', async (req, res) => {
 // ---------------------------------------------------------------------
 // GET /api/price-alerts/verify?token=... — e-posta sahipliğini doğrular
 // ---------------------------------------------------------------------
-app.get('/api/price-alerts/verify', async (req, res) => {
+app.get('/api/price-alerts/verify', verifyLimiter, async (req, res) => {
   try {
     const { token } = req.query;
     if (!token) {
@@ -250,6 +408,50 @@ app.get('/api/price-alerts/verify', async (req, res) => {
       success: true,
       message: 'Fiyat hedefine ulaşıldığında sana e-posta ile haber vereceğiz.',
       frontendUrl: FRONTEND_URL,
+      cancelUrl: `${BACKEND_URL}/api/price-alerts/cancel?token=${token}`,
+    }));
+  } catch (err) {
+    console.error(err);
+    res.status(500).type('html').send('<h1>Bir hata oluştu</h1>');
+  }
+});
+
+// ---------------------------------------------------------------------
+// GET /api/price-alerts/cancel?token=... — kullanıcı fikrini değiştirirse
+// tek tıkla alarmı iptal eder (hesap/giriş gerektirmez — aynı token,
+// onay linkiyle birlikte gönderilen e-postada da duruyor).
+// ---------------------------------------------------------------------
+app.get('/api/price-alerts/cancel', verifyLimiter, async (req, res) => {
+  try {
+    const { token } = req.query;
+    if (!token) {
+      return res.status(400).type('html').send(renderVerifyPage({
+        success: false, message: 'Geçersiz bağlantı.', frontendUrl: FRONTEND_URL,
+        pageTitle: 'İptal başarısız', heading: 'Onay bağlantısı geçersiz',
+      }));
+    }
+
+    const { rows } = await pool.query(
+      `UPDATE price_alerts SET is_active = false
+       WHERE verify_token = $1 AND is_active = true
+       RETURNING id`,
+      [token]
+    );
+
+    if (rows.length === 0) {
+      return res.type('html').send(renderVerifyPage({
+        success: false,
+        message: 'Bu alarm zaten iptal edilmiş, daha önce tetiklenmiş ya da bulunamadı.',
+        frontendUrl: FRONTEND_URL,
+        pageTitle: 'İptal edilemedi', heading: 'Alarm bulunamadı',
+      }));
+    }
+
+    res.type('html').send(renderVerifyPage({
+      success: true,
+      message: 'Fiyat alarmın iptal edildi, bundan sonra hiçbir bildirim göndermeyeceğiz.',
+      frontendUrl: FRONTEND_URL,
+      pageTitle: 'Alarm iptal edildi', heading: '✓ Fiyat alarmın iptal edildi',
     }));
   } catch (err) {
     console.error(err);
@@ -260,7 +462,7 @@ app.get('/api/price-alerts/verify', async (req, res) => {
 // ---------------------------------------------------------------------
 // POST /api/ai-search — basit kural tabanlı öneri (body: { query: "..." })
 // ---------------------------------------------------------------------
-app.post('/api/ai-search', async (req, res) => {
+app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
   try {
     const q = (req.body.query || '').toLowerCase();
 
@@ -275,41 +477,165 @@ app.post('/api/ai-search', async (req, res) => {
         && !q.includes('ön kamera') && !q.includes('selfie')
         && !q.includes('telefoto') && !q.includes('zoom') && !q.includes('uzak çekim'),
       battery: q.includes('pil') || q.includes('batarya'),
-      top: q.includes('güçlü') || q.includes('performans') || q.includes('en iyi') || q.includes('oyun'),
+      // "en iyi" kasıtlı olarak burada YOK — çok belirsiz ("en iyi kamera",
+      // "en iyi telefon" gibi her şeyi kapsayabilir) ve eskiden her sorguda
+      // ham donanım gücü sıralamasını tetikleyip diğer belirtilen kriterleri
+      // (kamera, pil vb.) es geçiyordu. Artık sadece net güç/performans
+      // niyeti (güçlü/performans/oyun) bu filtreyi tetikliyor.
+      top: q.includes('güçlü') || q.includes('performans') || q.includes('oyun'),
       light: q.includes('hafif') || q.includes('kompakt'),
       durable: q.includes('dayanıklı') || q.includes('su geçirmez') || q.includes('sağlam'),
       fastCharge: q.includes('hızlı şarj') || q.includes('çabuk şarj'),
       wirelessCharge: q.includes('kablosuz şarj'),
       zoom: q.includes('zoom') || q.includes('telefoto') || q.includes('uzak çekim'),
       selfie: q.includes('selfie') || q.includes('ön kamera'),
+      brightScreen: q.includes('parlak ekran') || q.includes('güneş') || q.includes('gün ışığı'),
+      // "yenileme hızı"/"Hz" verisi 40 üründe de vardı ama hiçbir filtre
+      // veya arayüz alanı bunu kullanmıyordu — toplanan ama hiç
+      // sorgulanamayan "ölü veri" idi. Artık gerçek bir sert filtre:
+      // katalogda hem 60Hz (çoğu temel iPhone) hem 120/144Hz ürün olduğu
+      // için bu ayrım anlamlı sonuç üretebiliyor.
+      highRefreshRate: /120\s*hz|144\s*hz|yüksek yenileme|akıcı ekran/.test(q),
+      // Bunlar "hangisi daha iyi" değil "var mı yok mu" soruları — NFC gibi
+      // net bir gereksinim, o yüzden soft puanlama yerine SQL'de sert filtre
+      // olarak uygulanıyor (aşağıda conditions.push).
+      video8k: q.includes('8k') || q.includes('8 k'),
+      satellite: q.includes('uydu'),
+      foldable: q.includes('katlanabilir') || q.includes('fold'),
+      stylus: q.includes('s pen') || q.includes('kalem') || q.includes('stylus'),
+      irBlaster: q.includes('kumanda') || q.includes('kızılötesi') || q.includes('ir blaster'),
+      faceUnlock: q.includes('yüz tanıma') || q.includes('face id'),
+      physicalSim: q.includes('fiziksel sim') || q.includes('fiziksel kart'),
+      // ESKİDEN "ucuz"/"pahalı" hiç tanınmıyordu — sadece BAŞKA hiçbir
+      // kriter yokken varsayılan "ucuza göre sırala" davranışıyla ucuz
+      // isteği tesadüfen karşılanıyordu. Ama "hızlı şarj olan UCUZ telefon"
+      // gibi bir sorguda bu kelime tamamen görmezden gelinip sonuç
+      // katalogdaki EN PAHALI hızlı şarj telefonu olabiliyordu — "pahalı"
+      // için de aynı şekilde tersi oluyordu. Artık ikisi de gerçek birer
+      // yumuşak kriter, diğerleriyle birlikte harmanlanıyor.
+      cheap: q.includes('ucuz') || q.includes('ekonomik'),
+      expensive: q.includes('pahalı') || q.includes('lüks') || q.includes('premium') || q.includes('üst segment'),
     };
-    const priceMatch = q.match(/(\d+)[.,]?(\d{3})?\s*(bin|tl)/);
-    if (priceMatch) {
-      let num = priceMatch[1] + (priceMatch[2] || '');
-      if (priceMatch[3] === 'bin' && !priceMatch[2]) num = priceMatch[1] + '000';
-      const value = parseInt(num, 10);
+    // "25 bin", "25bin", "30k", "25.000 TL", "25,000TL", "100.000 tl" gibi
+    // biçimlerin hepsini yakalar. Sayı grubu ondalık/binlik ayraçlı da
+    // olabilir (\d{1,3}(?:[.,]\d{3})*) — bu durumda "bin"/"k" ile TEKRAR
+    // çarpmıyoruz (aksi halde "25.000 bin TL" gibi anlamsız bir değer
+    // çıkardı); sadece ayraçsız "25 bin" gibi kısaltmalarda ×1000 yapıyoruz.
+    //
+    // "4k"/"8k" (video çözünürlüğü) fiyat regex'iyle ÇAKIŞIYORDU: "8K video
+    // çekebilen telefon" sorgusunda "8k" -> 8.000 TL bütçesi olarak
+    // yanlış algılanıyordu (hiçbir telefon 8.000 TL altında olmadığı için
+    // filtre sessizce tüm listeye düşüyordu, ama "reasons" metninde hâlâ
+    // "Bütçenin (8.000 TL) altında: 44999 TL" gibi anlamsız/çelişkili bir
+    // satır görünüyordu). Fiyatı SADECE bu iki bilinen çözünürlük kalıbı
+    // çıkarılmış bir kopya üzerinde arıyoruz; "video8k" filtresi orijinal
+    // q'ya bakmaya devam ediyor, etkilenmiyor.
+    // KRİTİK DÜZELTME: \d{1,3} (en fazla 3 basamak) kullanılıyordu — bu,
+    // ayraçsız 4+ basamaklı düz sayıları (ki insanların fiyat yazma
+    // biçiminin BÜYÜK ÇOĞUNLUĞU budur: "20000 TL", "25000 tl" gibi)
+    // TAMAMEN YANLIŞ parse ediyordu. Örnek: "25000 tl" regex'i SADECE
+    // sondaki "000"u yakalıyor, baştaki "25"i YUTUYORDU — sonuç
+    // maxPrice=0 (JS'te 0 falsy olduğu için "if (filters.maxPrice)"
+    // kontrolü hiç çalışmıyor, bütçe filtresi SESSİZCE tamamen devre dışı
+    // kalıyordu). Somut kanıt: "25000 TL altı kamera odaklı telefon"
+    // sorgusu 109.999 TL'lik bir telefon öneriyordu, hiçbir bütçe uyarısı
+    // olmadan. \d+ (sınırsız basamak) kullanmak hem bu düz sayı biçimini
+    // DOĞRU yakalıyor hem de "25.000"/"100.000" gibi noktalı/virgüllü
+    // binlik ayraçlı biçimleri de bozmadan destekliyor.
+    const qForPrice = q.replace(/\b[248]k\b/g, '');
+    // Bir "N bin/k/TL" eşleşmesini gerçek TL değerine çevirir — hem tek
+    // fiyat hem de aralık ("X ile Y arası") ayrıştırması bunu paylaşıyor.
+    function parseAmount(numGroup, unit) {
+      const hasThousandsSep = /[.,]\d{3}/.test(numGroup);
+      const rawNum = numGroup.replace(/[.,]/g, '');
+      let value = parseInt(rawNum, 10);
+      if ((unit === 'bin' || unit === 'k') && !hasThousandsSep) value *= 1000;
+      return value;
+    }
 
-      // Sayının yönünü ("altında" mı "üzerinde" mi) sorgu metninden anla;
-      // yön belirtilmemişse varsayılan olarak bütçe üst sınırı (altında) say.
-      const overWords = ['üzerinde', 'üzeri', 'üstünde', 'üstü', 'fazla', 'yukarı', 'daha pahalı'];
-      const underWords = ['altında', 'altı', 'aşağı', 'daha ucuz'];
-      const isOver = overWords.some(w => q.includes(w));
-      const isUnder = underWords.some(w => q.includes(w));
+    // ESKİDEN "50000 ile 80000 arası telefon" gibi ARALIK sorguları HİÇ
+    // tanınmıyordu (tek sayı yakalayan regex boşa çıkıyordu çünkü aralarda
+    // "tl"/"bin" geçmeyebiliyordu) — sonuç, bütçe tamamen yok sayılıp
+    // katalogdaki en ucuz telefonun (17.949 TL) önerilmesiydi, istenen
+    // 50-80 bin aralığıyla hiç ilgisi olmadan. Artık "X (ile/ila/-) Y
+    // aras-" kalıbı önce deneniyor; eşleşirse hem minPrice hem maxPrice
+    // birlikte set ediliyor.
+    const rangeMatch = qForPrice.match(
+      /(\d+(?:[.,]\d{3})*)\s*(bin|k)?\s*(?:ile|ila|-)\s*(\d+(?:[.,]\d{3})*)\s*(bin|k|tl)?\s*aras/
+    );
+    if (rangeMatch) {
+      const unitA = rangeMatch[2] || rangeMatch[4];
+      const unitB = rangeMatch[4] || rangeMatch[2];
+      const a = parseAmount(rangeMatch[1], unitA);
+      const b = parseAmount(rangeMatch[3], unitB);
+      filters.minPrice = Math.min(a, b);
+      filters.maxPrice = Math.max(a, b);
+    } else {
+      const priceMatch = qForPrice.match(/(\d+(?:[.,]\d{3})*)\s*(bin|k|tl)/);
+      if (priceMatch) {
+        const value = parseAmount(priceMatch[1], priceMatch[2]);
 
-      if (isOver && !isUnder) {
-        filters.minPrice = value;
-      } else {
-        filters.maxPrice = value;
+        // Sayının yönünü ("altında" mı "üzerinde" mi) sorgu metninden anla;
+        // yön belirtilmemişse varsayılan olarak bütçe üst sınırı (altında) say.
+        const overWords = ['üzerinde', 'üzeri', 'üstünde', 'üstü', 'fazla', 'yukarı', 'daha pahalı'];
+        const underWords = ['altında', 'altı', 'aşağı', 'daha ucuz'];
+        const isOver = overWords.some(w => q.includes(w));
+        const isUnder = underWords.some(w => q.includes(w));
+
+        if (isOver && !isUnder) {
+          filters.minPrice = value;
+        } else {
+          filters.maxPrice = value;
+        }
       }
     }
-    if (q.includes('apple') || q.includes('iphone')) filters.brand = 'Apple';
-    if (q.includes('samsung') || q.includes('galaxy')) filters.brand = 'Samsung';
-    if (q.includes('xiaomi') || q.includes('redmi') || q.includes('poco')) filters.brand = 'Xiaomi';
+
+    // Marka tespiti: sorguda birden fazla marka adı geçerse (nadir ama
+    // olası, örn. "Samsung değil de iPhone istiyorum"), sıralı if
+    // zincirinde SONUNCU eşleşen marka kazanıyordu — bu, kullanıcının
+    // asıl kastettiğiyle alakasız, kod sırasına bağlı bir davranıştı.
+    // Artık sorgu metninde EN ÖNCE geçen marka adı kazanıyor, çünkü
+    // insanlar genelde asıl istedikleri markayı önce söyler.
+    const BRAND_KEYWORDS = [
+      { brand: 'Apple', keywords: ['apple', 'iphone'] },
+      { brand: 'Samsung', keywords: ['samsung', 'galaxy'] },
+      { brand: 'Xiaomi', keywords: ['xiaomi', 'redmi', 'poco'] },
+      { brand: 'Google', keywords: ['google', 'pixel'] },
+      { brand: 'OnePlus', keywords: ['oneplus', 'one plus'] },
+    ];
+    let earliestBrandIdx = Infinity;
+    for (const { brand, keywords } of BRAND_KEYWORDS) {
+      for (const kw of keywords) {
+        const idx = q.indexOf(kw);
+        if (idx !== -1 && idx < earliestBrandIdx) {
+          earliestBrandIdx = idx;
+          filters.brand = brand;
+        }
+      }
+    }
+    // "POCO"/"Redmi" ŞİRKET olarak Xiaomi'ye ait, ama kullanıcı bu kelimeyi
+    // yazdığında brand=Xiaomi'ye genellemek yanlış: "POCO telefon" yazan
+    // biri eskiden Xiaomi markalı en ucuz telefon olan bir REDMI ürünü
+    // görüyordu, hiç POCO ürünü değil. Alt-marka adı ürün isminin BAŞINDA
+    // olduğu için (ör. "POCO F7...", "Redmi Note 15..."), isim öneki ile
+    // daha kesin bir eşleştirme yapıyoruz.
+    let subBrandPrefix = null;
+    if (q.includes('poco')) subBrandPrefix = 'POCO';
+    else if (q.includes('redmi')) subBrandPrefix = 'Redmi';
 
     const conditions = [`c.slug = 'telefon'`];
     const params = [];
     if (filters.brand) { params.push(filters.brand); conditions.push(`b.name = $${params.length}`); }
+    if (subBrandPrefix) { params.push(subBrandPrefix + '%'); conditions.push(`p.canonical_name ILIKE $${params.length}`); }
     if (filters.nfc) conditions.push(`(p.specs->>'has_nfc')::boolean = true`);
+    if (filters.video8k) conditions.push(`(p.specs->>'video_8k')::boolean = true`);
+    if (filters.satellite) conditions.push(`(p.specs->>'satellite_connectivity')::boolean = true`);
+    if (filters.foldable) conditions.push(`(p.specs->>'is_foldable')::boolean = true`);
+    if (filters.stylus) conditions.push(`(p.specs->>'has_stylus_support')::boolean = true`);
+    if (filters.irBlaster) conditions.push(`(p.specs->>'has_ir_blaster')::boolean = true`);
+    if (filters.faceUnlock) { params.push('Face ID (yüz tanıma)'); conditions.push(`p.specs->>'biometric_unlock' = $${params.length}`); }
+    if (filters.physicalSim) conditions.push(`(p.specs->>'sim_type') IS DISTINCT FROM 'Sadece eSIM'`);
+    if (filters.highRefreshRate) conditions.push(`(p.specs->>'refresh_rate_hz')::int >= 120`);
 
     const { rows: candidates } = await pool.query(
       `SELECT p.id, p.canonical_name, b.name AS brand, p.specs,
@@ -325,44 +651,209 @@ app.post('/api/ai-search', async (req, res) => {
       params
     );
 
+    // ESKİDEN belirli bir model adı yazan biri (ör. "iPhone 17 Pro") hiç
+    // dikkate alınmıyordu — sadece marka tespit edilip o markanın EN UCUZ
+    // ürünü öneriliyordu (kanıt: "iPhone 17 Pro" yazınca "iPhone 13 mini"
+    // öneriliyordu, aralarında hiçbir ilişki yokken). Şimdi her adayın
+    // ürün adından (depolama/"apple"/"samsung"/"5g"/"nfc" gibi genel
+    // sonekler çıkarılmış) anlamlı kelimeleri sorguda ARANIYOR; sorgu bir
+    // ürünün TÜM kelimelerini içeriyorsa (ve en az biri model numarası
+    // gibi rakam taşıyorsa) o ürün doğrudan sonuç oluyor. Birden fazla
+    // varyant eşleşirse (ör. "iPhone 17 Pro" hem "17 Pro" hem "17 Pro
+    // Max"a alt-küme olarak uyar) en FAZLA kelime eşleşen (en spesifik)
+    // varyant kazanıyor — "17 Pro Max" sorgusu yanlışlıkla sade "17 Pro"ya
+    // düşmüyor.
+    function modelTokens(name) {
+      return name
+        .toLowerCase()
+        .replace(/\+/g, ' plus ')
+        .replace(/\d+\s?gb\b/g, ' ')
+        .replace(/[^\wçğıöşü0-9\s]/g, ' ')
+        .split(/\s+/)
+        // "apple"/"samsung"/"google" gibi şirket adları buradan çıkarılıyor
+        // çünkü kullanıcılar model ararken bunları SÖYLEMEZ ("iPhone 17
+        // Pro" der, "Apple iPhone 17 Pro" demez — "Pixel 10 Pro" der,
+        // "Google Pixel 10 Pro" demez). "google" burada eksikti: "pixel 10
+        // pro" araması, tokens listesinde hâlâ zorunlu duran "google"
+        // kelimesi sorguda hiç geçmediği için hiçbir zaman tam eşleşme
+        // SAYILMIYOR, bunun yerine markaya göre filtrelenmiş havuzdaki
+        // varsayılan (en ucuz) ürüne düşülüyordu — kanıt: "pixel 10 pro"
+        // yanlışlıkla "Google Pixel 10" (Pro OLMAYAN, temel model) sonucu
+        // veriyordu. Xiaomi/Redmi/POCO/OnePlus buradan hariç tutulmuyor
+        // çünkü onlar gerçekten kullanıcıların söylediği ürün hattı adları.
+        // "galaxy" da benzer sebeple eklendi: Z serisinde kullanıcılar
+        // neredeyse hiç "Galaxy" demeden sadece "Z Fold7"/"Fold7" diyor —
+        // "galaxy" zorunlu tutulduğunda bu isimler HİÇ tam eşleşmiyor,
+        // sorgu bunun yerine genel "katlanabilir" anahtar kelime filtresine
+        // düşüp o filtrenin havuzundaki EN UCUZ telefonu (ki Fold7 değil,
+        // Flip7 FE'ydi) yanlışlıkla öneriyordu.
+        .filter(t => t.length > 1 && !['apple', 'samsung', 'google', 'galaxy', '5g', '4g', 'nfc'].includes(t));
+    }
+    // q.includes(t) düz alt-dize araması yapıyordu — bu, bir tokenin
+    // BAŞKA bir tokenin İÇİNDE geçtiği durumlarda YANLIŞ eşleşme
+    // üretiyordu: "13" tokeni "13r" sorgu metninin bir alt-dizesi olduğu
+    // için "OnePlus 13R" araması "OnePlus 13"ü de eşit derecede
+    // (tokens.length ikisi için de 2) eşleşmiş sayıyor, ardından SQL'in
+    // döndürdüğü rastgele sıraya göre hangisinin kazanacağı belirleniyordu.
+    // Kanıt: "iphone 17e" sorgusu da aynı sebeple "iPhone 17"yi
+    // döndürüyordu ("17" tokeni "17e"nin içinde geçiyor). Kelime sınırı
+    // (lookbehind/lookahead ile [a-z0-9] olmayan bir sınır) zorunlu
+    // kılınarak "13" artık "13r" içinde EŞLEŞMİYOR.
+    function tokenPresentInQuery(query, token) {
+      const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`).test(query);
+    }
+    // Ürün adlarındaki "+" işareti modelTokens() içinde "plus" kelimesine
+    // çevriliyor (ör. "Galaxy S26+" -> tokens: [..., 'plus']), ama sorgu
+    // metni AYNI dönüşümden GEÇMİYORDU — kullanıcı "galaxy s26+" yazdığında
+    // (ürünün resmi adını birebir yazmış olmasına rağmen) "plus" tokeni
+    // sorguda hiç bulunamıyor, ve S26+ yerine sade S26 öneriliyordu.
+    const qForModelMatch = q.replace(/\+/g, ' plus ');
+    // "galaxy" çıkarıldıktan sonra bazı modellerin (Z Fold7, Z Flip7, S26,
+    // A56...) geriye TEK bir token'ı kalıyor (ör. "fold7", "s26"). Genel
+    // kural en az 2 token istiyor (tek başına "13" veya "pro" gibi belirsiz
+    // kelimelerin yanlışlıkla tetiklenmesini önlemek için) — ama bu tek
+    // token hem harf hem rakam içeren "bileşik" bir model kodu ise (ör.
+    // "fold7", "s26", "a56", "13r") zaten yeterince spesifik/az çakışma
+    // riskli, o yüzden tek başına da tam eşleşme sayılabilir.
+    const isCompoundToken = t => /[a-z]/.test(t) && /\d/.test(t);
+    let exactMatch = null;
+    let exactMatchScore = 0;
+    for (const c of candidates) {
+      const tokens = modelTokens(c.canonical_name);
+      const hasNumber = tokens.some(t => /\d/.test(t));
+      const meetsMinimum = tokens.length >= 2 || (tokens.length === 1 && isCompoundToken(tokens[0]));
+      const allPresent = meetsMinimum && hasNumber && tokens.every(t => tokenPresentInQuery(qForModelMatch, t));
+      if (allPresent && tokens.length > exactMatchScore) {
+        exactMatchScore = tokens.length;
+        exactMatch = c;
+      }
+    }
+
     let pool_ = candidates;
-    if (filters.maxPrice) {
+    if (exactMatch) {
+      pool_ = [exactMatch];
+    }
+    // budgetUnmet: bütçeyi karşılayan HİÇBİR telefon yoksa true olur — bu
+    // durumda tüm listeye geri düşülüyor (boş sonuç göstermektense en
+    // yakın/en uygun seçeneği gösteriyoruz), ama aşağıdaki "reasons"
+    // metninde ARTIK "bütçenin altında" diye YANLIŞ bir iddiada
+    // bulunmuyoruz — bunun yerine dürüstçe bütçenin karşılanamadığını
+    // söylüyoruz (ör. "8.000 TL altı" sorgusunda hiçbir telefon o kadar
+    // ucuz değilken eskiden hâlâ "Bütçenin (8.000 TL) altında: 17.949 TL"
+    // gibi çelişkili/yanlış bir satır gösteriliyordu).
+    let budgetUnmet = false;
+    if (filters.maxPrice && filters.minPrice) {
+      // Aralık sorgusu ("50 bin ile 80 bin arası") — ESKİDEN if/else-if
+      // zinciri yüzünden minPrice hiç uygulanmıyordu, sadece maxPrice
+      // kontrol ediliyordu.
+      const inRange = pool_.filter(c => c.best_price >= filters.minPrice && c.best_price <= filters.maxPrice);
+      budgetUnmet = inRange.length === 0;
+      pool_ = inRange.length > 0 ? inRange : pool_;
+    } else if (filters.maxPrice) {
       const underBudget = pool_.filter(c => c.best_price <= filters.maxPrice);
+      budgetUnmet = underBudget.length === 0;
       pool_ = underBudget.length > 0 ? underBudget : pool_;
     } else if (filters.minPrice) {
       const overBudget = pool_.filter(c => c.best_price >= filters.minPrice);
+      budgetUnmet = overBudget.length === 0;
       pool_ = overBudget.length > 0 ? overBudget : pool_;
     }
 
     let topReasoning = null;
     let topUsedAI = false;
-    if (filters.camera) {
-      pool_.sort((a, b) => (b.specs.main_camera_mp||0) - (a.specs.main_camera_mp||0));
-    } else if (filters.zoom) {
-      pool_.sort((a, b) => (b.specs.optical_zoom_x||0) - (a.specs.optical_zoom_x||0));
-    } else if (filters.selfie) {
-      pool_.sort((a, b) => (b.specs.front_camera_mp||0) - (a.specs.front_camera_mp||0));
-    } else if (filters.battery) {
-      pool_.sort((a, b) => (b.specs.battery_mah||0) - (a.specs.battery_mah||0));
-    } else if (filters.fastCharge) {
-      pool_.sort((a, b) => (b.specs.wired_charging_watts||0) - (a.specs.wired_charging_watts||0));
-    } else if (filters.wirelessCharge) {
-      // eskiden bu, spec verisi eksik olan (yeni) telefonları SQL'de tamamen
-      // dışlıyordu — artık sadece sıralamada geriye düşüyorlar, listeden atılmıyorlar
-      pool_.sort((a, b) => (b.specs.wireless_charging_watts||0) - (a.specs.wireless_charging_watts||0));
-    } else if (filters.light) {
-      // ağırlık bilgisi olmayanları listenin sonuna at (0 -> Infinity)
-      pool_.sort((a, b) => (a.specs.weight_g || 9999) - (b.specs.weight_g || 9999));
-    } else if (filters.durable) {
-      // IP69 (toz+basınçlı su) > IP68 > diğer, ağırlık ikinci kriter değil
-      const durabilityScore = p => (p.specs.ip_rating || '').includes('69') ? 2 : (p.specs.ip_rating || '').includes('68') ? 1 : 0;
-      pool_.sort((a, b) => durabilityScore(b) - durabilityScore(a));
-    } else if (filters.top) {
+
+    // ESKİDEN: sorgu birden fazla kriter içerse bile ("hafif VE pili uzun
+    // bir telefon" gibi) if/else zinciri SADECE İLK eşleşen kriteri
+    // uyguluyor, geri kalanını tamamen görmezden geliyordu — bu da "daha
+    // doğru" değil, rastgele kod-sırasına bağlı bir öneri üretiyordu.
+    // ŞİMDİ: sorguda geçen TÜM yumuşak (soft) kriterler için her adayın
+    // 0-100 aralığında normalize edilmiş bir alt-puanı hesaplanıyor, bu
+    // puanların ortalaması alınıp öyle sıralanıyor — böylece birden fazla
+    // istek aynı anda dikkate alınıyor.
+    const normalize = (value, min, max) => (max <= min ? 50 : ((value - min) / (max - min)) * 100);
+    const SOFT_METRICS = {
+      // SADECE ana sensörün megapiksel sayısına bakmak yanıltıcı: bütçe
+      // telefonları genelde tek büyük-MP'li (ör. 200MP) ama başka lensi
+      // olmayan bir sensörle "kağıt üzerinde" kazanıyordu — örn. 18.000 TL
+      // bir telefon salt "200MP" yazdığı için, geniş açı+telefoto+optik
+      // zoom'a sahip 37.000 TL'lik çok daha yetenekli bir kamera sistemine
+      // sahip telefonun ÖNÜNE geçiyordu (gerçek fotoğraf kalitesinde MP
+      // sayısı ~50'den sonra ciddi şekilde düzleşir — sensör boyutu/piksel
+      // birleştirme sınırları yüzünden). Artık ana kamera katkısı 50MP'de
+      // tavanlanıyor, ikincil lensler (geniş açı/telefoto) ve optik zoom da
+      // puana ekleniyor — böylece "kamera odaklı" gerçekten daha yetenekli/
+      // çok lensli sistemleri öne çıkarıyor, tek şişirilmiş MP sayısını değil.
+      camera: c => {
+        const main = Math.min(c.specs.main_camera_mp || 0, 50);
+        const ultra = c.specs.ultra_wide_mp || 0;
+        const tele = c.specs.telephoto_mp || 0;
+        const zoomBonus = (c.specs.optical_zoom_x || 0) * 10;
+        return main + ultra * 0.4 + tele * 0.4 + zoomBonus;
+      },
+      zoom: c => c.specs.optical_zoom_x || 0,
+      selfie: c => c.specs.front_camera_mp || 0,
+      battery: c => c.specs.battery_mah || 0,
+      fastCharge: c => c.specs.wired_charging_watts || 0,
+      wirelessCharge: c => c.specs.wireless_charging_watts || 0,
+      light: c => -(c.specs.weight_g || 9999), // negatif: daha hafif = daha yüksek normalize puan
+      // IP69 (toz+basınçlı su) > IP68 > diğer
+      durable: c => ((c.specs.ip_rating || '').includes('69') ? 2 : (c.specs.ip_rating || '').includes('68') ? 1 : 0),
+      brightScreen: c => c.specs.screen_nits || 0,
+      cheap: c => -Number(c.best_price || 0), // negatif: ucuz = yüksek puan
+      expensive: c => Number(c.best_price || 0),
+    };
+    const activeSoftKeys = Object.keys(SOFT_METRICS).filter(k => filters[k]);
+
+    if (activeSoftKeys.length === 0 && filters.top) {
+      // Tek kriter: ham donanım gücü — nüanslı (ve varsa ücretli AI destekli)
+      // rankByPower() yolu aynen korunuyor.
       const { ranking, reasoning, usedAI } = await rankByPower(pool_);
       const orderMap = new Map(ranking.map((id, i) => [id, i]));
       pool_.sort((a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999));
       topReasoning = reasoning;
       topUsedAI = usedAI;
+    } else if (activeSoftKeys.length > 0) {
+      // Bir ya da daha fazla yumuşak kriter var (donanım gücüyle birlikte
+      // istenmiş olabilir) — hepsini tek bir bileşik puanda harmanla.
+      // "top" da isteniyorsa, ücretli AI çağrısı yapmadan (bileşik puanla
+      // uyumlu, anlık) computeHardwareScore()'u ek bir bileşen olarak katıyoruz.
+      const ranges = {};
+      for (const key of activeSoftKeys) {
+        const values = pool_.map(SOFT_METRICS[key]);
+        ranges[key] = { min: Math.min(...values), max: Math.max(...values) };
+      }
+      let hwRange = null;
+      if (filters.top) {
+        const hwValues = pool_.map(computeHardwareScore);
+        hwRange = { min: Math.min(...hwValues), max: Math.max(...hwValues) };
+      }
+
+      // "ucuz"/"pahalı" birlikte başka bir kriterle (ör. "hızlı şarj")
+      // istendiğinde EŞİT ağırlıklı ortalama yanıltıcı sonuç verebiliyordu:
+      // katalogdaki EN UÇ değere sahip bir telefon (ör. 120W ile en hızlı
+      // şarj) fiyatı 2 katına çıksa bile salt o tek boyuttaki aşırılığı
+      // sayesinde "ucuz" isteğini eziyordu (POCO F7 Ultra, 120W/52.499 TL,
+      // 90W/24.909 TL'lik POCO X7 Pro'yu geçiyordu — oysa ikisi arasındaki
+      // hız farkı fiyat farkını hak etmiyor). Kullanıcı fiyatı AÇIKÇA
+      // belirttiğinde bu genelde birincil kısıt olduğu için "cheap"/
+      // "expensive" diğer kriterlere göre 2x ağırlıklı sayılıyor.
+      const WEIGHT = { cheap: 2, expensive: 2 };
+      const scoreOf = c => {
+        let weightedSum = 0, totalWeight = 0;
+        for (const key of activeSoftKeys) {
+          const w = WEIGHT[key] || 1;
+          weightedSum += normalize(SOFT_METRICS[key](c), ranges[key].min, ranges[key].max) * w;
+          totalWeight += w;
+        }
+        if (hwRange) {
+          weightedSum += normalize(computeHardwareScore(c), hwRange.min, hwRange.max);
+          totalWeight += 1;
+        }
+        return weightedSum / totalWeight;
+      };
+      pool_.sort((a, b) => scoreOf(b) - scoreOf(a));
+      if (filters.top) topReasoning = 'Donanım gücü, istediğin diğer özelliklerle birlikte değerlendirildi';
     } else {
       pool_.sort((a, b) => a.best_price - b.best_price);
     }
@@ -370,24 +861,61 @@ app.post('/api/ai-search', async (req, res) => {
     const pick = pool_[0] || null;
     const reasons = [];
     if (pick) {
-      if (filters.maxPrice) reasons.push(`Bütçenin (${filters.maxPrice.toLocaleString('tr-TR')} TL) altında: ${pick.best_price.toLocaleString('tr-TR')} TL`);
-      if (filters.minPrice) reasons.push(`Belirtilen (${filters.minPrice.toLocaleString('tr-TR')} TL) üzerinde: ${pick.best_price.toLocaleString('tr-TR')} TL`);
+      // pg, numeric sütunları JS'e STRING olarak döndürür ("17949.00").
+      // String.prototype.toLocaleString() sayı BİÇİMLENDİRMESİ yapmaz,
+      // string'i olduğu gibi geri verir — bu yüzden "reasons" metinlerinde
+      // "17949.00 TL" gibi biçimlendirilmemiş fiyatlar görünüyordu (doğru
+      // biçim: "17.949 TL"). Number()'a çevirmeden .toLocaleString()
+      // çağırmak SESSİZCE yanlış (biçimsiz) sonuç veriyordu, hata fırlatmıyordu.
+      const bestPriceNum = Number(pick.best_price);
+      if (exactMatch) reasons.push('Aradığın model bulundu');
+      if (filters.maxPrice && filters.minPrice) {
+        const rangeLabel = `${filters.minPrice.toLocaleString('tr-TR')}-${filters.maxPrice.toLocaleString('tr-TR')} TL`;
+        reasons.push(budgetUnmet
+          ? `Bu aralıkta (${rangeLabel}) uygun telefon bulunamadı, en yakın seçenek gösteriliyor: ${bestPriceNum.toLocaleString('tr-TR')} TL`
+          : `Belirtilen aralıkta (${rangeLabel}): ${bestPriceNum.toLocaleString('tr-TR')} TL`);
+      } else if (filters.maxPrice) {
+        reasons.push(budgetUnmet
+          ? `Bu bütçede (${filters.maxPrice.toLocaleString('tr-TR')} TL altı) uygun telefon bulunamadı, en uygun fiyatlı seçenek gösteriliyor: ${bestPriceNum.toLocaleString('tr-TR')} TL`
+          : `Bütçenin (${filters.maxPrice.toLocaleString('tr-TR')} TL) altında: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
+      } else if (filters.minPrice) {
+        reasons.push(budgetUnmet
+          ? `Bu bütçede (${filters.minPrice.toLocaleString('tr-TR')} TL üzeri) uygun telefon bulunamadı, en yakın seçenek gösteriliyor: ${bestPriceNum.toLocaleString('tr-TR')} TL`
+          : `Belirtilen (${filters.minPrice.toLocaleString('tr-TR')} TL) üzerinde: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
+      }
       if (filters.nfc && pick.specs.has_nfc) reasons.push('NFC destekli');
       if (filters.wirelessCharge && pick.specs.wireless_charging_watts) reasons.push(`En hızlı kablosuz şarj: ${pick.specs.wireless_charging_watts}W`);
-      if (filters.camera) reasons.push(`Yüksek çözünürlüklü kamera: ${pick.specs.main_camera_mp}MP`);
+      if (filters.camera) {
+        const parts = [`${pick.specs.main_camera_mp}MP ana kamera`];
+        if (pick.specs.ultra_wide_mp) parts.push(`${pick.specs.ultra_wide_mp}MP geniş açı`);
+        if (pick.specs.telephoto_mp) parts.push(`${pick.specs.telephoto_mp}MP telefoto`);
+        if (pick.specs.optical_zoom_x) parts.push(`${pick.specs.optical_zoom_x}x optik zoom`);
+        reasons.push(`Kapsamlı kamera sistemi: ${parts.join(', ')}`);
+      }
       if (filters.zoom && pick.specs.optical_zoom_x) reasons.push(`En yüksek optik zoom: ${pick.specs.optical_zoom_x}x`);
       if (filters.selfie && pick.specs.front_camera_mp) reasons.push(`En yüksek çözünürlüklü ön kamera: ${pick.specs.front_camera_mp}MP`);
       if (filters.battery) reasons.push(`Yüksek batarya kapasitesi: ${pick.specs.battery_mah}mAh`);
       if (filters.fastCharge && pick.specs.wired_charging_watts) reasons.push(`En hızlı kablolu şarj: ${pick.specs.wired_charging_watts}W`);
       if (filters.light && pick.specs.weight_g) reasons.push(`Bu segmentteki en hafif seçeneklerden: ${pick.specs.weight_g}g`);
       if (filters.durable && pick.specs.ip_rating) reasons.push(`Yüksek dayanıklılık sınıfı: ${pick.specs.ip_rating}`);
+      if (filters.brightScreen && pick.specs.screen_nits) reasons.push(`Güneş altında bile okunaklı, parlak ekran: ${pick.specs.screen_nits} nit`);
+      if (filters.video8k && pick.specs.video_8k) reasons.push('8K çözünürlükte video kaydı yapabiliyor');
+      if (filters.satellite && pick.specs.satellite_connectivity) reasons.push('Çekim alanı dışında uydu üzerinden acil durum mesajı gönderebiliyor');
+      if (filters.foldable && pick.specs.is_foldable) reasons.push(`Katlanabilir tasarım: ${pick.specs.fold_style}`);
+      if (filters.stylus && pick.specs.has_stylus_support) reasons.push('S Pen ile kullanılabiliyor');
+      if (filters.irBlaster && pick.specs.has_ir_blaster) reasons.push('Kızılötesi (IR) kumanda özelliği var — TV, klima gibi cihazları telefonla yönetebilirsin');
+      if (filters.faceUnlock && pick.specs.biometric_unlock) reasons.push(`Kilit açma yöntemi: ${pick.specs.biometric_unlock}`);
+      if (filters.physicalSim && pick.specs.sim_type) reasons.push(`SIM desteği: ${pick.specs.sim_type}`);
+      if (filters.highRefreshRate && pick.specs.refresh_rate_hz) reasons.push(`Yüksek yenileme hızlı, akıcı ekran: ${pick.specs.refresh_rate_hz}Hz`);
+      if (filters.cheap && !filters.maxPrice && !filters.minPrice) reasons.push(`Uygun fiyatlı bir seçenek: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
+      if (filters.expensive) reasons.push(`Üst segment bir seçenek: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
       if (filters.top) {
         const label = topUsedAI ? 'Yapay zeka analizi' : 'Donanım analizi';
         reasons.push(topReasoning
           ? `${label}: ${topReasoning}`
           : `En yüksek donanım seviyesi: ${pick.specs.ram_gb}GB RAM, ${pick.specs.chip}`);
       }
-      if (reasons.length === 0) reasons.push(`En uygun fiyatlı seçenek: ${pick.best_price.toLocaleString('tr-TR')} TL`);
+      if (reasons.length === 0) reasons.push(`En uygun fiyatlı seçenek: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
       reasons.push(`En uygun fiyat ${pick.best_seller} üzerinden`);
     }
 
@@ -398,16 +926,42 @@ app.post('/api/ai-search', async (req, res) => {
   }
 });
 
+// Sadece http/https URL'lerini kabul eder. Bunsuz bir saldırgan
+// productUrl/affiliateUrl alanına "javascript:..." gibi bir URI
+// verebiliyordu — bu, veritabanına öylece kaydolup sonra "Satıcıya Git"
+// linki olarak render edildiğinde tıklanınca sitede JS çalıştırabilen
+// depolanmış (stored) bir XSS açığıydı. Test ederek doğruladım ve
+// kapattım.
+function isSafeHttpUrl(value) {
+  if (typeof value !== 'string') return false;
+  try {
+    const u = new URL(value);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 // ---------------------------------------------------------------------
 // POST /api/ingest-offer — Scraper'ların ham ürün verisini gönderdiği uç
 // nokta. Otomatik eşleştirme motorunu (match-product.js) çalıştırır.
 // Body: { sellerName, rawTitle, price, currency?, productUrl, affiliateUrl?, gtin?, mpn? }
 // ---------------------------------------------------------------------
-app.post('/api/ingest-offer', async (req, res) => {
+app.post('/api/ingest-offer', ingestLimiter, async (req, res) => {
   try {
     const { sellerName, rawTitle, price, currency, productUrl, affiliateUrl, gtin, mpn } = req.body;
     if (!sellerName || !rawTitle || !price || !productUrl) {
       return res.status(400).json({ error: 'sellerName, rawTitle, price, productUrl zorunludur' });
+    }
+    if (typeof sellerName !== 'string' || typeof rawTitle !== 'string' || rawTitle.length > 300 || sellerName.length > 200) {
+      return res.status(400).json({ error: 'sellerName/rawTitle geçersiz ya da çok uzun' });
+    }
+    const numericPrice = Number(price);
+    if (!Number.isFinite(numericPrice) || numericPrice <= 0) {
+      return res.status(400).json({ error: 'price geçerli, pozitif bir sayı olmalı' });
+    }
+    if (!isSafeHttpUrl(productUrl) || (affiliateUrl !== undefined && !isSafeHttpUrl(affiliateUrl))) {
+      return res.status(400).json({ error: 'productUrl/affiliateUrl geçerli bir http(s) adresi olmalı' });
     }
 
     const { rows: sellerRows } = await pool.query('SELECT id FROM sellers WHERE name = $1', [sellerName]);
@@ -416,7 +970,7 @@ app.post('/api/ingest-offer', async (req, res) => {
     }
 
     const result = await matchProduct(pool, {
-      rawTitle, gtin, mpn, price, currency, productUrl, affiliateUrl,
+      rawTitle, gtin, mpn, price: numericPrice, currency, productUrl, affiliateUrl,
       sellerId: sellerRows[0].id,
     });
 
@@ -489,6 +1043,14 @@ app.get('/robots.txt', (req, res) => {
   res.type('text/plain').send(`User-agent: *\nAllow: /\nSitemap: ${BACKEND_URL}/sitemap.xml\n`);
 });
 
+// Sosyal paylaşımda (WhatsApp/Twitter/LinkedIn önizlemesi) kullanılan
+// markalı görsel — og:image olarak ürün sayfalarında kullanılıyor.
+// Gerçek ürün fotoğrafımız yok (telifsiz kaynak yok), o yüzden tek,
+// jenerik bir marka kartı kullanıyoruz.
+app.get('/og-image.png', (req, res) => {
+  res.sendFile(path.join(__dirname, 'og-image.png'));
+});
+
 // Fiyat alarmlarını düzenli aralıklarla kontrol et — eskiden bu sadece
 // elle (node check-price-alerts.js) çalıştırılıyordu, canlıya alınca
 // ayrıca bir cron kurmayı unutmak kolaydı. Artık sunucu ayaktayken
@@ -499,6 +1061,25 @@ function runPriceAlertCheck() {
     .catch(err => console.error('✘ Fiyat alarmı kontrolü hatası:', err.message));
 }
 setInterval(runPriceAlertCheck, ALERT_CHECK_INTERVAL_MS);
+
+// Tanımsız route'lar için düz JSON 404 (Express'in varsayılan HTML
+// sayfası yerine).
+app.use((req, res) => {
+  res.status(404).json({ error: 'Bulunamadı' });
+});
+
+// ---------------------------------------------------------------------
+// Genel hata yakalayıcı — MUTLAKA en sonda olmalı (Express, 4 parametreli
+// fonksiyonu error handler olarak tanır). Bozuk JSON gönderme gibi bir
+// route handler'ın try/catch'ine hiç girmeyen hatalar (express.json()
+// gibi middleware'lerden atılanlar) buraya düşer. Bunsuz Express
+// varsayılan olarak tam dosya yolunu ve stack trace'i içeren bir HTML
+// sayfası döndürüyordu — gerçek isteklerle doğrulayıp kapattım.
+// ---------------------------------------------------------------------
+app.use((err, req, res, next) => {
+  console.error('✘ Yakalanmamış hata:', err);
+  res.status(err.status || 500).json({ error: 'Geçersiz istek' });
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {

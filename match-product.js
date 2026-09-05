@@ -14,6 +14,22 @@ const { normalizeTitle } = require('./normalize');
 const AUTO_MATCH_THRESHOLD = 0.65;
 const REVIEW_THRESHOLD = 0.40;
 
+// server.js'teki POST /api/ingest-offer aynısını kontrol ediyordu, ama
+// SADECE o HTTP uç noktasında — matchProduct() fonksiyonu doğrudan başka
+// bir yerden (örn. bir test script'i, ileride eklenecek bir cron/CLI
+// aracı) çağrılırsa bu kontrolden hiç geçmiyordu. Asıl veriyi yazan
+// nokta burası olduğu için doğrulama da burada, kaynağında olmalı —
+// HTTP katmanındaki kontrol artık bir ön-filtre, asıl güvence bu.
+function isSafeHttpUrl(value) {
+  if (typeof value !== 'string') return false;
+  try {
+    const u = new URL(value);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
 /**
  * @param {import('pg').Pool} pool
  * @param {object} input
@@ -31,6 +47,10 @@ async function matchProduct(pool, input) {
     rawTitle, gtin, mpn, sellerId, price,
     currency = 'TRY', productUrl, affiliateUrl,
   } = input;
+
+  if (!isSafeHttpUrl(productUrl) || (affiliateUrl !== undefined && affiliateUrl !== null && !isSafeHttpUrl(affiliateUrl))) {
+    throw new Error('productUrl/affiliateUrl geçerli bir http(s) adresi olmalı');
+  }
 
   // --- ADIM 1: GTIN ile kesin eşleşme ---
   if (gtin) {
