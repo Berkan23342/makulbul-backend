@@ -50,7 +50,7 @@ async function main() {
         rawTitle: test.rawTitle,
         sellerId: sellerRows[0].id,
         price: test.price,
-        productUrl: 'https://example.com/cepfiyat-test-match-script',
+        productUrl: 'https://example.com/makulbul-test-match-script',
       });
 
       console.log(`Ham başlık : "${test.rawTitle}"`);
