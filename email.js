@@ -10,7 +10,7 @@
 require('dotenv').config();
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const ALERT_FROM_EMAIL = process.env.ALERT_FROM_EMAIL || 'Makulbul <alerts@makulbul.example>';
+const ALERT_FROM_EMAIL = process.env.ALERT_FROM_EMAIL || 'Makulbul <alerts@makulbul.com>';
 
 async function sendEmail({ to, subject, text }) {
   if (!RESEND_API_KEY) {
