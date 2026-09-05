@@ -473,9 +473,19 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
       nfc: q.includes('nfc'),
       // "telefoto"/"zoom"/"ön kamera"/"selfie" geçen sorgularda genel kamera
       // (MP) sıralamasına değil, kendi özel kriterine (zoom/selfie) düşsün
+      // "kamera düğmesi/düğmeli/kumandası" (fiziksel deklanşör düğmesi)
+      // burada da hariç tutuluyor — aksi halde "kamera düğmeli ucuz
+      // telefon" sorgusu hem bu genel MP/lens kalite puanlamasını HEM
+      // cameraButton sert filtresini birlikte tetikliyor, ve "ucuz"
+      // isteğine rağmen düğmeli telefonlar arasında en UCUZ değil en
+      // ZENGİN kamera sistemine sahip olanı (Sony Xperia 1 VII, 64.999
+      // TL) öneriyordu — oysa aynı düğmeye sahip iPhone 16 (55.999 TL)
+      // daha ucuzdu. Düğme sorgusu kamera KALİTESİYLE değil donanımsal
+      // bir anahtarla ilgili, ikisi karıştırılmamalı.
       camera: q.includes('kamera')
         && !q.includes('ön kamera') && !q.includes('selfie')
-        && !q.includes('telefoto') && !q.includes('zoom') && !q.includes('uzak çekim'),
+        && !q.includes('telefoto') && !q.includes('zoom') && !q.includes('uzak çekim')
+        && !q.includes('düğme') && !q.includes('kumanda'),
       battery: q.includes('pil') || q.includes('batarya'),
       // "en iyi" kasıtlı olarak burada YOK — çok belirsiz ("en iyi kamera",
       // "en iyi telefon" gibi her şeyi kapsayabilir) ve eskiden her sorguda
@@ -501,11 +511,44 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
       // olarak uygulanıyor (aşağıda conditions.push).
       video8k: q.includes('8k') || q.includes('8 k'),
       satellite: q.includes('uydu'),
-      foldable: q.includes('katlanabilir') || q.includes('fold'),
+      // "katlanabilir" tam kelimesi aranıyordu — ama "katlanan telefon"
+      // (farklı bir çekim: katlan-an, katlan-ır vb.) da en az o kadar
+      // doğal bir ifade ve HİÇ eşleşmiyordu. "katlan" fiil kökü tüm
+      // çekimlerde (katlanabilir/katlanan/katlanır/katlandığında) ortak.
+      foldable: q.includes('katlan') || q.includes('fold'),
       stylus: q.includes('s pen') || q.includes('kalem') || q.includes('stylus'),
-      irBlaster: q.includes('kumanda') || q.includes('kızılötesi') || q.includes('ir blaster'),
+      // "kumanda" tek başına TV/klima kızılötesi kumandası demek, ama
+      // Apple'ın Türkçe pazarlamasında "Kamera Kumandası" (Camera
+      // Control) düğmesinin adı da bu kelimeyi içeriyor — "kamera
+      // kumandalı ucuz telefon" dediğinde ikisi de tetiklenip
+      // (has_ir_blaster=true AND has_camera_button=true) kesişimi boş
+      // küme çıkarıyordu (o iki özelliğe birlikte sahip TEK ürün yok),
+      // sonuç sessizce "SONUÇ YOK" oluyordu. "kamera kumanda-" öbeği
+      // varsa bu sadece kamera düğmesi demektir, IR kumandasıyla alakasız.
+      irBlaster: (q.includes('kumanda') && !q.includes('kamera kumanda')) || q.includes('kızılötesi') || q.includes('ir blaster'),
       faceUnlock: q.includes('yüz tanıma') || q.includes('face id'),
       physicalSim: q.includes('fiziksel sim') || q.includes('fiziksel kart'),
+      // Sony Xperia'nın eklenmesiyle gelen üç yeni özellik: kulaklık
+      // girişi ve hafıza kartı deposu artık katalogda GERÇEKTEN ayrım
+      // yaratıyor (Sony bunları koruyor, geri kalan hiçbir marka
+      // korumuyor); kamera düğmesi ise Apple'ın iPhone 16 nesliyle
+      // gelen "Kamera Kumanda" düğmesi VE Sony'nin fiziksel deklanşörü
+      // için ortak bir filtre.
+      // İLK SÜRÜMDE bu üçü tam kelime öbeği arıyordu ("kulaklık girişi",
+      // "hafıza kartı", "kamera düğmesi") — ama Türkçe eklemeli bir dil:
+      // kullanıcı çok daha doğal olarak "kulaklık GİRİŞLİ telefon",
+      // "hafıza KARTLI telefon", "kamera DÜĞMELİ telefon" der (iyelik eki
+      // "-i" yerine sıfat eki "-li"). Tam öbek arandığı için bu son derece
+      // doğal ifadeler HİÇ eşleşmiyordu — kanıt: "kamera düğmeli ucuz
+      // telefon" filtreyi hiç tetiklemeden genel "kamera" anahtar
+      // kelimesine (kamera düğmesiyle alakasız MP bazlı kamera puanlamasına)
+      // düşüyor, "hafıza kartlı"/"kulaklık girişli" ise HİÇBİR filtreye
+      // düşmeden sessizce en ucuz telefonu (kamerayla/girişle hiç ilgisi
+      // olmayan Redmi Note 15 5G) öneriyordu. Kök kelimeyi (sondaki
+      // iyelik/sıfat ekini olmadan) aramak her iki çekimi de yakalıyor.
+      headphoneJack: (q.includes('kulaklık') && q.includes('giriş')) || q.includes('3.5mm') || q.includes('3,5mm') || q.includes('aux'),
+      expandableStorage: q.includes('hafıza kart') || q.includes('microsd') || q.includes('sd kart'),
+      cameraButton: q.includes('kamera düğme') || q.includes('deklanşör') || q.includes('kamera kumanda') || q.includes('çekim düğme'),
       // ESKİDEN "ucuz"/"pahalı" hiç tanınmıyordu — sadece BAŞKA hiçbir
       // kriter yokken varsayılan "ucuza göre sırala" davranışıyla ucuz
       // isteği tesadüfen karşılanıyordu. Ama "hızlı şarj olan UCUZ telefon"
@@ -602,6 +645,8 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
       { brand: 'Xiaomi', keywords: ['xiaomi', 'redmi', 'poco'] },
       { brand: 'Google', keywords: ['google', 'pixel'] },
       { brand: 'OnePlus', keywords: ['oneplus', 'one plus'] },
+      { brand: 'Sony', keywords: ['sony', 'xperia'] },
+      { brand: 'Honor', keywords: ['honor'] },
     ];
     let earliestBrandIdx = Infinity;
     for (const { brand, keywords } of BRAND_KEYWORDS) {
@@ -636,6 +681,9 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
     if (filters.faceUnlock) { params.push('Face ID (yüz tanıma)'); conditions.push(`p.specs->>'biometric_unlock' = $${params.length}`); }
     if (filters.physicalSim) conditions.push(`(p.specs->>'sim_type') IS DISTINCT FROM 'Sadece eSIM'`);
     if (filters.highRefreshRate) conditions.push(`(p.specs->>'refresh_rate_hz')::int >= 120`);
+    if (filters.headphoneJack) conditions.push(`(p.specs->>'has_headphone_jack')::boolean = true`);
+    if (filters.expandableStorage) conditions.push(`(p.specs->>'has_expandable_storage')::boolean = true`);
+    if (filters.cameraButton) conditions.push(`(p.specs->>'has_camera_button')::boolean = true`);
 
     const { rows: candidates } = await pool.query(
       `SELECT p.id, p.canonical_name, b.name AS brand, p.specs,
@@ -687,7 +735,23 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
         // sorgu bunun yerine genel "katlanabilir" anahtar kelime filtresine
         // düşüp o filtrenin havuzundaki EN UCUZ telefonu (ki Fold7 değil,
         // Flip7 FE'ydi) yanlışlıkla öneriyordu.
-        .filter(t => t.length > 1 && !['apple', 'samsung', 'google', 'galaxy', '5g', '4g', 'nfc'].includes(t));
+        // "sony" da aynı sebeple eklendi: kullanıcılar "Xperia 1 VII" der,
+        // "Sony Xperia 1 VII" demez (marka adı "Xperia" ürün hattı adının
+        // gölgesinde kalıyor — tıpkı "Pixel" gibi). "Honor" burada YOK,
+        // çünkü Xiaomi/OnePlus gibi kullanıcılar bunu genelde söylüyor.
+        //
+        // t.length > 1 kuralı tek karakterli "gürültü" kelimelerini
+        // (örn. "Z Fold7"deki yalnız "z") elemek için var — ama "Sony
+        // Xperia 1 VII" gibi modellerde tek haneli "1" GÜRÜLTÜ DEĞİL,
+        // modelin kendisini belirleyen rakam (Xperia 1 ile Xperia 10 iki
+        // AYRI, ilgisiz ürün hattı). Bu kural tüm tek karakterleri kör
+        // kör eliyordu: "1" tokeni hiç hayatta kalmıyor, dolayısıyla
+        // "Xperia 1 VII" hiçbir zaman tam eşleşme sayılmıyor (hasNumber
+        // kontrolü bile geçemiyor) ve sorgu "xperia 1 vii" yazınca
+        // markaya göre filtrelenmiş havuzdaki EN UCUZ Sony telefonuna
+        // (Xperia 10 VII) düşülüyordu. Çözüm: rakam olan tek karakterleri
+        // (uzunluğuna bakmaksızın) koru, sadece tek harfleri ele.
+        .filter(t => (t.length > 1 || /\d/.test(t)) && !['apple', 'samsung', 'google', 'galaxy', 'sony', '5g', '4g', 'nfc'].includes(t));
     }
     // q.includes(t) düz alt-dize araması yapıyordu — bu, bir tokenin
     // BAŞKA bir tokenin İÇİNDE geçtiği durumlarda YANLIŞ eşleşme
@@ -907,6 +971,9 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
       if (filters.faceUnlock && pick.specs.biometric_unlock) reasons.push(`Kilit açma yöntemi: ${pick.specs.biometric_unlock}`);
       if (filters.physicalSim && pick.specs.sim_type) reasons.push(`SIM desteği: ${pick.specs.sim_type}`);
       if (filters.highRefreshRate && pick.specs.refresh_rate_hz) reasons.push(`Yüksek yenileme hızlı, akıcı ekran: ${pick.specs.refresh_rate_hz}Hz`);
+      if (filters.headphoneJack && pick.specs.has_headphone_jack) reasons.push('3.5mm kulaklık girişi var — kablosuz kulaklığa gerek kalmadan bağlanabiliyorsun');
+      if (filters.expandableStorage && pick.specs.has_expandable_storage) reasons.push('microSD kart ile depolama alanı genişletilebiliyor');
+      if (filters.cameraButton && pick.specs.has_camera_button) reasons.push('Fiziksel kamera düğmesiyle hızlı çekim yapabiliyorsun');
       if (filters.cheap && !filters.maxPrice && !filters.minPrice) reasons.push(`Uygun fiyatlı bir seçenek: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
       if (filters.expensive) reasons.push(`Üst segment bir seçenek: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
       if (filters.top) {

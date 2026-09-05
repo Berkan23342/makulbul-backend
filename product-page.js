@@ -75,6 +75,9 @@ const SPEC_LABELS = [
   ['has_ir_blaster', 'Kızılötesi (IR) Kumanda', v => (v ? 'Var' : 'Yok')],
   ['video_8k', '8K Video Kaydı', v => (v ? 'Var' : 'Yok')],
   ['satellite_connectivity', 'Uydu Bağlantısı', v => (v ? 'Var' : 'Yok')],
+  ['has_headphone_jack', 'Kulaklık Girişi (3.5mm)', v => (v ? 'Var' : 'Yok')],
+  ['has_expandable_storage', 'Hafıza Kartı Desteği (microSD)', v => (v ? 'Var' : 'Yok')],
+  ['has_camera_button', 'Fiziksel Kamera Düğmesi', v => (v ? 'Var' : 'Yok')],
   ['release_year', 'Çıkış Yılı', v => v],
 ];
 
