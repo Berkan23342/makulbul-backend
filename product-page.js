@@ -201,7 +201,6 @@ const PAGE_STYLE = `
   .offer-row-info{display:flex;flex-direction:column;gap:3px}
   .offer-seller{font-size:14px;font-weight:600}
   .offer-price{font-family:'IBM Plex Mono',monospace;font-size:15px;color:var(--muted)}
-  .offer-installments{font-size:11.5px;color:var(--muted);font-family:'IBM Plex Mono',monospace;margin-top:9px}
   .offer-buy{
     display:inline-flex;align-items:center;gap:7px;background:var(--signal);color:#fff;font-weight:700;
     font-size:13px;padding:9px 14px;border-radius:9px;text-decoration:none;white-space:nowrap;
@@ -329,7 +328,6 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
         </div>
         <a class="offer-buy" href="${safeHref(o.affiliate_url)}" target="_blank" rel="nofollow sponsored noopener">Satıcıya Git <span class="ad-tag">Reklam</span></a>
       </div>
-      ${o.installments ? `<div class="offer-installments">${o.installments.map(i => `${i.months} x ${fmtTL(i.monthlyAmount)}`).join(' · ')}</div>` : ''}
     </div>`;
   }
   // İlk yüklemede sadece VARSAYILAN (en ucuz) varyantın teklifleri
@@ -509,12 +507,11 @@ ${renderNav(frontendUrl)}
     function renderOfferRows(offerList, gb){
       offerRowsContainerEl.innerHTML = offerList.map(function(o){
         var tag = (gb || o.color) ? ' <span class="offer-variant-tag">' + (gb ? formatGb(gb) : '') + (gb && o.color ? ', ' : '') + escHtml(o.color || '') + '</span>' : '';
-        var installmentsHtml = o.installments ? '<div class="offer-installments">' + o.installments.map(function(i){ return i.months + ' x ' + fmt(i.monthlyAmount); }).join(' · ') + '</div>' : '';
         return '<div class="offer-row"><div class="offer-row-top"><div class="offer-row-info">' +
           '<span class="offer-seller">' + escHtml(o.seller_name) + tag + '</span>' +
           '<span class="offer-price">' + fmt(o.price) + '</span></div>' +
           '<a class="offer-buy" href="' + safeUrl(o.affiliate_url) + '" target="_blank" rel="nofollow sponsored noopener">Satıcıya Git <span class="ad-tag">Reklam</span></a></div>' +
-          installmentsHtml + '</div>';
+          '</div>';
       }).join('') || '<p class="muted">Bu seçenek için şu an teklif yok.</p>';
     }
     function renderColorSwatches(gb, selectedColor){

@@ -18,7 +18,6 @@ process.on('unhandledRejection', (reason) => {
 
 const { matchProduct } = require('./match-product');
 const { rankByPower, computeHardwareScore } = require('./ai-rank');
-const { getInstallmentOptions } = require('./installments');
 const { renderProductPage, renderNotFoundPage, slugify } = require('./product-page');
 const { createRateLimiter } = require('./rate-limit');
 
@@ -136,9 +135,7 @@ async function attachOffers(products) {
   );
   return products.map(p => ({
     ...p,
-    offers: offers
-      .filter(o => o.product_id === p.id)
-      .map(o => ({ ...o, installments: getInstallmentOptions(o.price, o.seller_name) })),
+    offers: offers.filter(o => o.product_id === p.id),
   }));
 }
 
