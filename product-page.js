@@ -216,6 +216,7 @@ function renderNav(frontendUrl) {
 function renderNotFoundPage(frontendUrl) {
   return `<!doctype html>
 <html lang="tr"><head><meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'">
 <title>Ürün bulunamadı — Makulbul</title>
 <meta name="robots" content="noindex">
 ${FAVICON_LINK}
@@ -345,6 +346,12 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<!-- Hostinger'ın CDN/proxy katmanı server.js'in gönderdiği
+     Content-Security-Policy HEADER'ını eziyor (sadece
+     upgrade-insecure-requests kalıyor) — HTML gövdesinin bir parçası
+     olan bu META etiketi ise ezilmiyor, o yüzden CSP burada AYRICA
+     tanımlanıyor (index.html'deki meta tag'iyle aynı). -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'">
 <title>${esc(title)}</title>
 <meta name="description" content="${esc(description)}">
 <meta name="robots" content="index, follow">
