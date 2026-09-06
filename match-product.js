@@ -214,4 +214,4 @@ async function finalizeMatch(pool, { productId, canonicalName, confidence, metho
   return { status: 'matched', productId, canonicalName, confidence, method };
 }
 
-module.exports = { matchProduct, AUTO_MATCH_THRESHOLD, REVIEW_THRESHOLD };
+module.exports = { matchProduct, AUTO_MATCH_THRESHOLD, REVIEW_THRESHOLD, isSafeHttpUrl, hostnameMatchesDomain, urlMatchesSellerDomain };

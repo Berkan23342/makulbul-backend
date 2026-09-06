@@ -16,7 +16,12 @@ process.on('unhandledRejection', (reason) => {
   console.error('✘ Yakalanmamış promise reddi:', reason);
 });
 
-const { matchProduct } = require('./match-product');
+// isSafeHttpUrl/urlMatchesSellerDomain: "javascript:..." gibi tehlikeli
+// URI'leri ve satıcının kendi alan adıyla uyuşmayan linkleri reddeden
+// ortak doğrulama — hem burada (ör. /satici-git yönlendirmesi) hem
+// match-product.js'te (asıl yazma noktası) AYNI fonksiyon kullanılıyor,
+// iki ayrı kopyanın zamanla birbirinden sapması riskini ortadan kaldırır.
+const { matchProduct, isSafeHttpUrl, urlMatchesSellerDomain } = require('./match-product');
 const { rankByPower, computeHardwareScore } = require('./ai-rank');
 const { renderProductPage, renderNotFoundPage, slugify } = require('./product-page');
 const { createRateLimiter } = require('./rate-limit');
@@ -124,7 +129,7 @@ async function attachOffers(products) {
   if (products.length === 0) return products;
   const ids = products.map(p => p.id);
   const { rows: offers } = await pool.query(
-    `SELECT o.product_id, o.price, o.currency, o.affiliate_url, o.in_stock,
+    `SELECT o.id, o.product_id, o.price, o.currency, o.affiliate_url, o.in_stock,
             o.storage_gb, o.color,
             s.name AS seller_name
      FROM offers o
@@ -591,9 +596,14 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
               (SELECT s.name FROM offers o JOIN sellers s ON s.id = o.seller_id
                  WHERE o.product_id = p.id AND s.name = ANY($${sellersParamIdx}::text[])
                  ORDER BY o.price ASC LIMIT 1) AS best_seller,
-              (SELECT o.affiliate_url FROM offers o JOIN sellers s3 ON s3.id = o.seller_id
+              -- Önceden burada doğrudan o.affiliate_url seçilip ai-search
+              -- yanıtında ham hâliyle gönderiliyordu — artık offer.id
+              -- gönderiliyor, frontend /satici-git/:id üzerinden gidiyor
+              -- (bkz. GET /satici-git/:offerId). Gerçek link artık AI
+              -- arama sonucunda da sayfa kaynağında hiç görünmüyor.
+              (SELECT o.id FROM offers o JOIN sellers s3 ON s3.id = o.seller_id
                  WHERE o.product_id = p.id AND s3.name = ANY($${sellersParamIdx}::text[])
-                 ORDER BY o.price ASC LIMIT 1) AS best_url
+                 ORDER BY o.price ASC LIMIT 1) AS best_offer_id
        FROM products p
        JOIN brands b ON b.id = p.brand_id
        JOIN categories c ON c.id = p.category_id
@@ -857,7 +867,7 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
     // girmeden burada ayrı ve dürüst bir yanıt dönüyoruz.
     if (pick && pick.best_price === null) {
       return res.json({
-        pick: { id: pick.id, canonical_name: pick.canonical_name, best_price: null, best_seller: null, best_url: null },
+        pick: { id: pick.id, canonical_name: pick.canonical_name, best_price: null, best_seller: null, best_offer_id: null },
         reasons: ['Aradığın model bulundu', 'Şu an Hepsiburada, Trendyol veya Amazon TR üzerinde satışta değil'],
         candidates: [],
       });
@@ -951,22 +961,6 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
   }
 });
 
-// Sadece http/https URL'lerini kabul eder. Bunsuz bir saldırgan
-// productUrl/affiliateUrl alanına "javascript:..." gibi bir URI
-// verebiliyordu — bu, veritabanına öylece kaydolup sonra "Satıcıya Git"
-// linki olarak render edildiğinde tıklanınca sitede JS çalıştırabilen
-// depolanmış (stored) bir XSS açığıydı. Test ederek doğruladım ve
-// kapattım.
-function isSafeHttpUrl(value) {
-  if (typeof value !== 'string') return false;
-  try {
-    const u = new URL(value);
-    return u.protocol === 'http:' || u.protocol === 'https:';
-  } catch {
-    return false;
-  }
-}
-
 // ---------------------------------------------------------------------
 // POST /api/ingest-offer — Scraper'ların ham ürün verisini gönderdiği uç
 // nokta. Otomatik eşleştirme motorunu (match-product.js) çalıştırır.
@@ -1022,6 +1016,58 @@ app.post('/api/ingest-offer', ingestLimiter, async (req, res) => {
       return res.status(400).json({ error: err.message });
     }
     res.status(500).json({ error: 'Eşleştirme yapılamadı' });
+  }
+});
+
+// ---------------------------------------------------------------------
+// GET /satici-git/:offerId — affiliate link "cloaking" (gizleme) katmanı.
+// ÖNCEDEN "Satıcıya Git" linkleri doğrudan offers.affiliate_url'i sayfa
+// kaynağında (HTML'de) taşıyordu. Bunun bilinen bir riski var: bazı
+// zararlı tarayıcı eklentileri (ya da rakip bir affiliate ağı) sayfadaki
+// linkleri tarayıp kendi takip kimliğiyle DEĞİŞTİREREK tıklamayı bize,
+// ama komisyonu kendine yönlendirebiliyor ("affiliate link hijacking").
+// Artık HİÇBİR sayfada gerçek affiliate_url görünmüyor — her "Satıcıya
+// Git" linki buraya işaret ediyor, asıl adrese sadece TIKLANDIĞI anda,
+// sunucu tarafında 302 ile yönlendiriliyor. Bu ayrıca match-product.js
+//'teki satıcı alan adı doğrulamasını TIKLAMA ANINDA bir kez daha
+// uyguluyor — savunma derinliği: veriye nasıl/ne zaman yazıldığından
+// bağımsız, kullanıcıyı GERÇEKTEN göndereceğimiz her link son kez kontrol
+// edilmiş oluyor.
+// ---------------------------------------------------------------------
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+app.get('/satici-git/:offerId', async (req, res) => {
+  // Postgres, uuid tipi bir sütunla geçersiz formatlı bir değer
+  // karşılaştırılınca hata fırlatır — bu, aşağıdaki catch'e düşüp
+  // yanlışlıkla "sunucu hatası" (500) gibi görünürdü; format hatası
+  // aslında bir istemci hatası (400) olduğu için burada erken kontrol
+  // ediyoruz.
+  if (!UUID_RE.test(req.params.offerId)) {
+    return res.status(400).send('Geçersiz teklif kimliği.');
+  }
+  try {
+    const { rows } = await pool.query(
+      `SELECT o.affiliate_url, s.website_domain
+       FROM offers o JOIN sellers s ON s.id = o.seller_id
+       WHERE o.id = $1`,
+      [req.params.offerId]
+    );
+    if (rows.length === 0) {
+      return res.status(404).send('Teklif bulunamadı.');
+    }
+    const { affiliate_url: affiliateUrl, website_domain: websiteDomain } = rows[0];
+    if (!isSafeHttpUrl(affiliateUrl) || !urlMatchesSellerDomain(affiliateUrl, websiteDomain)) {
+      // Buraya düşülmesi normalde imkansız (yazma anında zaten aynı
+      // kontrol var) — ama veritabanına başka bir yoldan (elle çalışan
+      // bir script, gelecekte eklenecek bir admin paneli) hatalı bir
+      // değer girerse kullanıcıyı sessizce yanlış/güvensiz bir adrese
+      // göndermek yerine burada durduruyoruz.
+      console.error(`⚠ /satici-git: satıcı alan adıyla uyuşmayan link engellendi (offerId=${req.params.offerId})`);
+      return res.status(400).send('Geçersiz link.');
+    }
+    res.redirect(302, affiliateUrl);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Yönlendirilemedi.');
   }
 });
 

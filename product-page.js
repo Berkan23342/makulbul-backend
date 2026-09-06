@@ -53,19 +53,6 @@ function displayModelName(canonicalName) {
     .trim();
 }
 
-// server.js artık ingest sırasında http(s) dışı URL'leri reddediyor,
-// ama bu render katmanında ikinci bir savunma satırı — esc() sadece
-// HTML özel karakterlerini kaçırır, "javascript:..." gibi bir şemayı
-// engellemez, o yüzden href'e basmadan önce ayrıca şema kontrolü yapılır.
-function safeHref(url) {
-  try {
-    const u = new URL(url);
-    return (u.protocol === 'http:' || u.protocol === 'https:') ? esc(url) : '#';
-  } catch {
-    return '#';
-  }
-}
-
 function fmtTL(n) {
   return Number(n).toLocaleString('tr-TR') + ' TL';
 }
@@ -326,7 +313,7 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
           <span class="offer-seller">${esc(o.seller_name)}${tag}</span>
           <span class="offer-price">${fmtTL(o.price)}</span>
         </div>
-        <a class="offer-buy" href="${safeHref(o.affiliate_url)}" target="_blank" rel="nofollow sponsored noopener">Satıcıya Git <span class="ad-tag">Reklam</span></a>
+        <a class="offer-buy" href="${esc(backendUrl)}/satici-git/${esc(o.id)}" target="_blank" rel="nofollow sponsored noopener">Satıcıya Git <span class="ad-tag">Reklam</span></a>
       </div>
     </div>`;
   }
@@ -467,12 +454,6 @@ ${renderNav(frontendUrl)}
         return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
       });
     }
-    function safeUrl(url){
-      try {
-        var u = new URL(url, location.href);
-        return (u.protocol === 'http:' || u.protocol === 'https:') ? u.href : '#';
-      } catch (e) { return '#'; }
-    }
     // Sunucu tarafındaki formatGb() ile aynı mantık — 1024'ün katı olan
     // kapasiteleri "1TB" gibi okunaklı gösterir.
     function formatGb(gb){
@@ -510,7 +491,7 @@ ${renderNav(frontendUrl)}
         return '<div class="offer-row"><div class="offer-row-top"><div class="offer-row-info">' +
           '<span class="offer-seller">' + escHtml(o.seller_name) + tag + '</span>' +
           '<span class="offer-price">' + fmt(o.price) + '</span></div>' +
-          '<a class="offer-buy" href="' + safeUrl(o.affiliate_url) + '" target="_blank" rel="nofollow sponsored noopener">Satıcıya Git <span class="ad-tag">Reklam</span></a></div>' +
+          '<a class="offer-buy" href="' + API_BASE + '/satici-git/' + encodeURIComponent(o.id) + '" target="_blank" rel="nofollow sponsored noopener">Satıcıya Git <span class="ad-tag">Reklam</span></a></div>' +
           '</div>';
       }).join('') || '<p class="muted">Bu seçenek için şu an teklif yok.</p>';
     }
