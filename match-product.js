@@ -130,12 +130,21 @@ async function finalizeMatch(pool, { productId, canonicalName, confidence, metho
   // aynı ürünü tekrar tarar) yeni bir satır EKLEMEK yerine mevcut
   // satırı güncelliyoruz — önceden her ingest yeni bir satır açıyordu,
   // bu da zamanla bayat/yanlış "en uygun fiyat" hesaplarına yol
-  // açıyordu (offers.product_id+seller_id üzerindeki UNIQUE kısıt bunu
-  // artık veritabanı seviyesinde de garanti ediyor).
+  // açıyordu (offers.product_id+seller_id+storage_gb+color üzerindeki
+  // UNIQUE kısıt bunu artık veritabanı seviyesinde de garanti ediyor).
+  //
+  // Canlı scraper akışı henüz kapasite/renk varyantı ayırt etmiyor —
+  // ürünün KENDİ spec.storage_gb'sini "varsayılan varyant" olarak
+  // damgalıyoruz (color boş kalır). Farklı bir kapasite/renk için ayrı
+  // bir gerçek teklif, sadece elle çalıştırılan araştırma script'leri
+  // (bkz. apply-real-prices*.js) tarafından ekleniyor.
+  const { rows: productRows } = await pool.query(`SELECT specs->>'storage_gb' AS storage_gb FROM products WHERE id = $1`, [productId]);
+  const defaultStorageGb = Number(productRows[0]?.storage_gb) || 0;
+
   const { rows } = await pool.query(
-    `INSERT INTO offers (product_id, seller_id, raw_title, product_url, affiliate_url, price, currency, last_checked_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7, now())
-     ON CONFLICT (product_id, seller_id) DO UPDATE SET
+    `INSERT INTO offers (product_id, seller_id, raw_title, product_url, affiliate_url, price, currency, storage_gb, color, last_checked_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'', now())
+     ON CONFLICT (product_id, seller_id, storage_gb, color) DO UPDATE SET
        raw_title = EXCLUDED.raw_title,
        product_url = EXCLUDED.product_url,
        affiliate_url = EXCLUDED.affiliate_url,
@@ -143,7 +152,7 @@ async function finalizeMatch(pool, { productId, canonicalName, confidence, metho
        currency = EXCLUDED.currency,
        last_checked_at = now()
      RETURNING id`,
-    [productId, sellerId, rawTitle, productUrl, affiliateUrl || productUrl, price, currency]
+    [productId, sellerId, rawTitle, productUrl, affiliateUrl || productUrl, price, currency, defaultStorageGb]
   );
   // fiyat grafiği için bu anki fiyatı price_history'ye ayrı bir kayıt
   // olarak ekle — bu, offers'tan farklı olarak birikmesi GEREKEN veri

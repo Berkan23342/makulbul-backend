@@ -126,6 +126,7 @@ async function attachOffers(products) {
   const ids = products.map(p => p.id);
   const { rows: offers } = await pool.query(
     `SELECT o.product_id, o.price, o.currency, o.affiliate_url, o.in_stock,
+            o.storage_gb, o.color,
             s.name AS seller_name
      FROM offers o
      JOIN sellers s ON s.id = o.seller_id

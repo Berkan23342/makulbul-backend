@@ -153,6 +153,16 @@ const PAGE_STYLE = `
     border:1px solid rgba(255,255,255,.15);display:block;
   }
   .color-picker-selected{font-size:13px;color:var(--text);margin-top:9px;font-weight:600}
+  .variant-picker{margin-top:18px;display:flex;flex-direction:column;gap:16px}
+  .variant-picker-label{font-size:12px;color:var(--muted);margin-bottom:8px}
+  .variant-pills{display:flex;gap:8px;flex-wrap:wrap}
+  .variant-pill{
+    background:var(--surface-2);border:1.5px solid var(--border);color:var(--text);
+    font-size:13px;font-weight:600;padding:8px 14px;border-radius:9px;cursor:pointer;
+    font-family:'IBM Plex Mono',monospace;
+  }
+  .variant-pill.selected{border-color:var(--signal);background:var(--signal-soft);color:var(--signal)}
+  .offer-variant-tag{font-size:11px;color:var(--muted);font-weight:500;font-family:'IBM Plex Mono',monospace}
   section{margin-bottom:36px}
   section h2{font-size:18px;margin:0 0 16px}
   table.spec-table{width:100%;border-collapse:collapse;font-size:13.5px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
@@ -225,14 +235,46 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
 
   const specRows = SPEC_LABELS
     .filter(([key]) => specs[key] !== undefined && specs[key] !== null)
-    .map(([key, label, fmtFn]) => `<tr><th>${esc(label)}</th><td>${esc(fmtFn(specs[key]))}</td></tr>`)
+    .map(([key, label, fmtFn]) => `<tr><th>${esc(label)}</th><td${key === 'storage_gb' ? ' id="spec-storage-value"' : ''}>${esc(fmtFn(specs[key]))}</td></tr>`)
     .join('');
 
-  // Renk seçimi salt bilgilendirme amaçlı — kataloğumuzda renge göre ayrı
-  // fiyat/teklif yok, o yüzden seçim sadece görsel olarak hangi rengin
-  // vurgulandığını değiştiriyor (satın alınacak teklifi etkilemiyor).
+  // Araştırma, kataloğumuzdaki birçok ürünün artık KENDİ spec'indeki
+  // kapasitede sıfır satılmadığını ama AYNI modelin FARKLI bir
+  // kapasitede/renkte gerçekten satışta olduğunu ortaya çıkardı (bkz.
+  // apply-real-prices-round2.js). Tekliflerdeki GERÇEK (storage_gb,
+  // color) kombinasyonlarını grupluyoruz — birden fazla gerçek varyant
+  // varsa interaktif bir seçici gösteriyoruz (fiyat/satıcı listesi
+  // GERÇEKTEN değişiyor); tek varyant varsa (kataloğun çoğunluğu) eski
+  // sade görünüm (salt bilgilendirici renk swatch'ları) korunuyor.
+  function variantKeyOf(o) { return `${o.storage_gb}::${o.color}`; }
+  const variantGroups = new Map();
+  for (const o of offers) {
+    const key = variantKeyOf(o);
+    if (!variantGroups.has(key)) variantGroups.set(key, { storage_gb: o.storage_gb, color: o.color, offers: [] });
+    variantGroups.get(key).offers.push(o);
+  }
+  const variants = [...variantGroups.values()]
+    .map(v => ({ ...v, offers: v.offers.sort((a, b) => a.price - b.price) }))
+    .sort((a, b) => a.offers[0].price - b.offers[0].price);
+  const hasVariantPicker = variants.length > 1;
+  const defaultVariant = variants[0];
+  const storageOptions = [...new Set(variants.map(v => v.storage_gb))].sort((a, b) => a - b);
+
+  // Renk seçimi TEK varyantlı ürünlerde salt bilgilendirme amaçlı —
+  // kataloğumuzda o durumda renge göre ayrı fiyat/teklif yok.
   const colors = Array.isArray(specs.colors) ? specs.colors : [];
-  const colorSwatches = colors.length ? `
+
+  const variantPickerHTML = hasVariantPicker ? `
+    <div class="variant-picker" id="variant-picker" data-variants="${esc(JSON.stringify(variants))}">
+      ${storageOptions.length > 1 ? `
+      <div class="variant-group">
+        <div class="variant-picker-label">Depolama</div>
+        <div class="variant-pills" id="storage-pills">
+          ${storageOptions.map(gb => `<button type="button" class="variant-pill${gb === defaultVariant.storage_gb ? ' selected' : ''}" data-storage="${gb}">${gb}GB</button>`).join('')}
+        </div>
+      </div>` : ''}
+      <div class="variant-group" id="variant-color-group"></div>
+    </div>` : (colors.length ? `
     <div class="color-picker" id="color-picker">
       <div class="color-picker-label">Renk Seçenekleri</div>
       <div class="color-swatches">
@@ -241,19 +283,29 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
         `).join('')}
       </div>
       <div class="color-picker-selected">${esc(colors[0])}</div>
-    </div>` : '';
+    </div>` : '');
 
-  const offerRows = offers.map(o => `
+  function offerRowHTML(o) {
+    const tag = hasVariantPicker && (o.storage_gb || o.color)
+      ? ` <span class="offer-variant-tag">${o.storage_gb ? o.storage_gb + 'GB' : ''}${o.storage_gb && o.color ? ', ' : ''}${esc(o.color || '')}</span>`
+      : '';
+    return `
     <div class="offer-row">
       <div class="offer-row-top">
         <div class="offer-row-info">
-          <span class="offer-seller">${esc(o.seller_name)}</span>
+          <span class="offer-seller">${esc(o.seller_name)}${tag}</span>
           <span class="offer-price">${fmtTL(o.price)}</span>
         </div>
         <a class="offer-buy" href="${safeHref(o.affiliate_url)}" target="_blank" rel="nofollow sponsored noopener">Satıcıya Git <span class="ad-tag">Reklam</span></a>
       </div>
       ${o.installments ? `<div class="offer-installments">${o.installments.map(i => `${i.months} x ${fmtTL(i.monthlyAmount)}`).join(' · ')}</div>` : ''}
-    </div>`).join('');
+    </div>`;
+  }
+  // İlk yüklemede sadece VARSAYILAN (en ucuz) varyantın teklifleri
+  // gösteriliyor — kalan varyantlar seçici ile client-side filtreleniyor
+  // (tüm teklif verisi zaten sayfaya gömülü, yeni bir istek gerekmiyor).
+  const initialOfferList = hasVariantPicker ? defaultVariant.offers : offers;
+  const offerRows = initialOfferList.map(offerRowHTML).join('');
 
   const jsonLd = {
     '@context': 'https://schema.org/',
@@ -311,11 +363,11 @@ ${renderNav(frontendUrl)}
       <span class="brand-badge">${esc(product.brand)}</span>
       <h1>${esc(product.canonical_name)}</h1>
       ${best ? `
-        <div class="price-big">${fmtTL(best.price)}</div>
-        <div class="seller-line">${esc(best.seller_name)} üzerinden en uygun fiyat · ${offers.length} satıcı karşılaştırıldı</div>
+        <div class="price-big" id="price-big">${fmtTL(best.price)}</div>
+        <div class="seller-line" id="seller-line">${esc(best.seller_name)} üzerinden en uygun fiyat · ${initialOfferList.length} satıcı karşılaştırıldı</div>
         ${isLowestIn30d ? `<div class="lowest-badge"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5v9"/><path d="M4.5 8 8 11.5 11.5 8"/></svg><span>Son 30 günün en düşük fiyatı</span></div>` : ''}
       ` : `<p class="muted">Şu an satışta değil.</p>`}
-      ${colorSwatches}
+      ${variantPickerHTML}
     </div>
   </div>
 
@@ -325,8 +377,8 @@ ${renderNav(frontendUrl)}
   </section>
 
   <section>
-    <h2>Satıcılar (${offers.length})</h2>
-    ${offerRows || '<p class="muted">Şu an aktif teklif bulunmuyor.</p>'}
+    <h2 id="offers-heading">Satıcılar (${initialOfferList.length})</h2>
+    <div id="offer-rows-container">${offerRows || '<p class="muted">Şu an aktif teklif bulunmuyor.</p>'}</div>
   </section>
 
   <section>
@@ -361,6 +413,116 @@ ${renderNav(frontendUrl)}
         if (label) label.textContent = btn.dataset.color;
       });
     });
+  }
+
+  // Depolama/renk VARYANT seçici: renk seçicinin aksine burası salt
+  // görsel değil — her (kapasite, renk) kombinasyonunun KENDİ gerçek
+  // satıcı tekliflerini gösteriyor (bkz. apply-real-prices-round2.js).
+  // Seçim değiştikçe fiyat, satıcı sayısı, "Depolama" spek satırı ve
+  // teklif listesi GERÇEKTEN güncelleniyor — yeni bir istek atmadan,
+  // sayfaya zaten gömülü olan tüm varyant verisini filtreleyerek.
+  var variantPicker = document.getElementById('variant-picker');
+  if (variantPicker) {
+    var variants = JSON.parse(variantPicker.getAttribute('data-variants'));
+    var fmt = function(n){ return Number(n).toLocaleString('tr-TR') + ' TL'; };
+    var storagePillsEl = document.getElementById('storage-pills');
+    var colorGroupEl = document.getElementById('variant-color-group');
+    var priceBigEl = document.getElementById('price-big');
+    var sellerLineEl = document.getElementById('seller-line');
+    var offersHeadingEl = document.getElementById('offers-heading');
+    var offerRowsContainerEl = document.getElementById('offer-rows-container');
+    var specStorageEl = document.getElementById('spec-storage-value');
+
+    function escHtml(s){
+      return String(s || '').replace(/[&<>"']/g, function(c){
+        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+      });
+    }
+    function safeUrl(url){
+      try {
+        var u = new URL(url, location.href);
+        return (u.protocol === 'http:' || u.protocol === 'https:') ? u.href : '#';
+      } catch (e) { return '#'; }
+    }
+    // Sunucu tarafındaki colorSwatchHex() ile aynı mantık — client-side
+    // tekrar yazılmak zorunda çünkü seçim değişince YENİ swatch'lar
+    // burada, tarayıcıda üretiliyor.
+    function colorHex(name){
+      var n = (name || '').toLowerCase();
+      if (n.indexOf('siyah')>-1||n.indexOf('obsidyen')>-1||n.indexOf('gece')>-1||n.indexOf('arduvaz')>-1) return '#1c1c1e';
+      if (n.indexOf('beyaz')>-1||n.indexOf('porselen')>-1||n.indexOf('bulut')>-1) return '#f2f1ed';
+      if (n.indexOf('mavi')>-1||n.indexOf('lacivert')>-1||n.indexOf('indigo')>-1||n.indexOf('gökyüzü')>-1||n.indexOf('gelgit')>-1) return '#3d6ea5';
+      if (n.indexOf('kırmızı')>-1||n.indexOf('mercan')>-1||n.indexOf('red')>-1) return '#c0392b';
+      if (n.indexOf('yeşil')>-1||n.indexOf('yosun')>-1||n.indexOf('yeşim')>-1||n.indexOf('adaçayı')>-1||n.indexOf('zeytin')>-1) return '#5c7d5a';
+      if (n.indexOf('sarı')>-1) return '#d8c22c';
+      if (n.indexOf('mor')>-1||n.indexOf('lavanta')>-1||n.indexOf('orkide')>-1||n.indexOf('kobalt')>-1) return '#7b5ea7';
+      if (n.indexOf('pembe')>-1||n.indexOf('rose')>-1) return '#dfa3b5';
+      if (n.indexOf('turkuaz')>-1) return '#2a9d8f';
+      if (n.indexOf('turuncu')>-1) return '#d9782d';
+      if (n.indexOf('altın')>-1||n.indexOf('gold')>-1) return '#c9a86a';
+      if (n.indexOf('gümüş')>-1||n.indexOf('silver')>-1) return '#c7c7c9';
+      if (n.indexOf('gri')>-1||n.indexOf('grafit')>-1||n.indexOf('antrasit')>-1||n.indexOf('titanyum')>-1) return '#8a8a8e';
+      if (n.indexOf('bej')>-1) return '#d8c6a8';
+      return '#9a9a9a';
+    }
+
+    function variantsForStorage(gb){
+      return variants.filter(function(v){ return v.storage_gb === gb; });
+    }
+    function renderOfferRows(offerList, gb){
+      offerRowsContainerEl.innerHTML = offerList.map(function(o){
+        var tag = (gb || o.color) ? ' <span class="offer-variant-tag">' + (gb ? gb + 'GB' : '') + (gb && o.color ? ', ' : '') + escHtml(o.color || '') + '</span>' : '';
+        var installmentsHtml = o.installments ? '<div class="offer-installments">' + o.installments.map(function(i){ return i.months + ' x ' + fmt(i.monthlyAmount); }).join(' · ') + '</div>' : '';
+        return '<div class="offer-row"><div class="offer-row-top"><div class="offer-row-info">' +
+          '<span class="offer-seller">' + escHtml(o.seller_name) + tag + '</span>' +
+          '<span class="offer-price">' + fmt(o.price) + '</span></div>' +
+          '<a class="offer-buy" href="' + safeUrl(o.affiliate_url) + '" target="_blank" rel="nofollow sponsored noopener">Satıcıya Git <span class="ad-tag">Reklam</span></a></div>' +
+          installmentsHtml + '</div>';
+      }).join('') || '<p class="muted">Bu seçenek için şu an teklif yok.</p>';
+    }
+    function renderColorSwatches(gb, selectedColor){
+      var withColor = variantsForStorage(gb).filter(function(v){ return v.color; });
+      if (!withColor.length) { colorGroupEl.innerHTML = ''; return; }
+      colorGroupEl.innerHTML =
+        '<div class="variant-picker-label">Renk</div><div class="color-swatches">' +
+        withColor.map(function(v){
+          var sel = v.color === selectedColor ? ' selected' : '';
+          return '<button type="button" class="color-swatch' + sel + '" data-color="' + escHtml(v.color) + '" style="--swatch-color:' + colorHex(v.color) + '" title="' + escHtml(v.color) + '"><span class="swatch-dot"></span></button>';
+        }).join('') +
+        '</div><div class="color-picker-selected">' + escHtml(selectedColor || '') + '</div>';
+      colorGroupEl.querySelectorAll('.color-swatch').forEach(function(btn){
+        btn.addEventListener('click', function(){ selectVariant(gb, btn.getAttribute('data-color')); });
+      });
+    }
+    function selectVariant(gb, color){
+      var match = variants.filter(function(v){ return v.storage_gb === gb && v.color === color; })[0] || variantsForStorage(gb)[0];
+      if (!match) return;
+      var best = match.offers[0];
+      priceBigEl.textContent = fmt(best.price);
+      sellerLineEl.textContent = best.seller_name + ' üzerinden en uygun fiyat · ' + match.offers.length + ' satıcı karşılaştırıldı';
+      if (offersHeadingEl) offersHeadingEl.textContent = 'Satıcılar (' + match.offers.length + ')';
+      if (specStorageEl) specStorageEl.textContent = gb + ' GB';
+      renderOfferRows(match.offers, gb);
+      if (storagePillsEl) {
+        storagePillsEl.querySelectorAll('.variant-pill').forEach(function(p){
+          p.classList.toggle('selected', Number(p.getAttribute('data-storage')) === gb);
+        });
+      }
+      renderColorSwatches(gb, match.color);
+    }
+
+    if (storagePillsEl) {
+      storagePillsEl.querySelectorAll('.variant-pill').forEach(function(btn){
+        btn.addEventListener('click', function(){
+          var gb = Number(btn.getAttribute('data-storage'));
+          var vs = variantsForStorage(gb);
+          selectVariant(gb, vs[0].color);
+        });
+      });
+    }
+    // İlk render zaten sunucu tarafında en ucuz varyantla yapıldı,
+    // sadece o varyanta uygun renk swatch'larını çiziyoruz.
+    renderColorSwatches(variants[0].storage_gb, variants[0].color);
   }
 })();
 </script>
