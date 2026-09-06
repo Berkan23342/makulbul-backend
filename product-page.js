@@ -29,6 +29,22 @@ function esc(str) {
   ));
 }
 
+// canonical_name içindeki depolama kapasitesini ("256GB", "1 TB" vb.)
+// başlıktan çıkarır — artık kapasite sayfada SEÇİLEBİLİR bir seçenek
+// (bkz. variant-picker), o yüzden ana başlıkta sadece marka+model
+// kalmalı. Sadece kapasite token'ını kaldırıyoruz; "iPhone 13 mini"
+// gibi model adının parçası olan sayılara ya da "NFC"/"5G" gibi diğer
+// SKU etiketlerine dokunmuyoruz (onlar seçilebilir birer seçenek değil,
+// modelin sabit bir parçası). <title>/meta/JSON-LD gibi SEO amaçlı
+// alanlarda hâlâ TAM canonical_name kullanılıyor — sadece görünür ana
+// başlık (h1/kart h3) bundan etkileniyor.
+function displayModelName(canonicalName) {
+  return String(canonicalName || '')
+    .replace(/\s*\b\d+\s?(GB|TB)\b/i, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
 // server.js artık ingest sırasında http(s) dışı URL'leri reddediyor,
 // ama bu render katmanında ikinci bir savunma satırı — esc() sadece
 // HTML özel karakterlerini kaçırır, "javascript:..." gibi bir şemayı
@@ -361,7 +377,7 @@ ${renderNav(frontendUrl)}
     <div class="hero-thumb">${THUMB_SVG}</div>
     <div class="hero-info">
       <span class="brand-badge">${esc(product.brand)}</span>
-      <h1>${esc(product.canonical_name)}</h1>
+      <h1>${esc(displayModelName(product.canonical_name))}</h1>
       ${best ? `
         <div class="price-big" id="price-big">${fmtTL(best.price)}</div>
         <div class="seller-line" id="seller-line">${esc(best.seller_name)} üzerinden en uygun fiyat · ${initialOfferList.length} satıcı karşılaştırıldı</div>
