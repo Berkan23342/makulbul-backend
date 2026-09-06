@@ -38,6 +38,14 @@ function esc(str) {
 // modelin sabit bir parçası). <title>/meta/JSON-LD gibi SEO amaçlı
 // alanlarda hâlâ TAM canonical_name kullanılıyor — sadece görünür ana
 // başlık (h1/kart h3) bundan etkileniyor.
+// 1024 GB'ın katı olan kapasiteleri "1TB"/"2TB" gibi okunaklı gösterir
+// (ör. araştırmadan gelen bazı gerçek teklifler storage_gb=1024) —
+// diğer tüm değerler ("256", "512" vb.) olduğu gibi "NNNGB" kalır.
+function formatGb(gb) {
+  const n = Number(gb);
+  return (n >= 1024 && n % 1024 === 0) ? `${n / 1024}TB` : `${n}GB`;
+}
+
 function displayModelName(canonicalName) {
   return String(canonicalName || '')
     .replace(/\s*\b\d+\s?(GB|TB)\b/i, '')
@@ -87,7 +95,7 @@ function colorSwatchHex(name) {
 
 const SPEC_LABELS = [
   ['ram_gb', 'RAM', v => `${v} GB`],
-  ['storage_gb', 'Depolama', v => `${v} GB`],
+  ['storage_gb', 'Depolama', v => (v >= 1024 && v % 1024 === 0) ? `${v / 1024} TB` : `${v} GB`],
   ['screen_inch', 'Ekran', v => `${v}"`],
   ['refresh_rate_hz', 'Ekran Yenileme Hızı', v => `${v}Hz`],
   ['battery_mah', 'Batarya', v => `${v} mAh`],
@@ -249,11 +257,6 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
 
   const isLowestIn30d = best && minPrice30d != null && Number(best.price) <= Number(minPrice30d) + 0.5;
 
-  const specRows = SPEC_LABELS
-    .filter(([key]) => specs[key] !== undefined && specs[key] !== null)
-    .map(([key, label, fmtFn]) => `<tr><th>${esc(label)}</th><td${key === 'storage_gb' ? ' id="spec-storage-value"' : ''}>${esc(fmtFn(specs[key]))}</td></tr>`)
-    .join('');
-
   // Araştırma, kataloğumuzdaki birçok ürünün artık KENDİ spec'indeki
   // kapasitede sıfır satılmadığını ama AYNI modelin FARKLI bir
   // kapasitede/renkte gerçekten satışta olduğunu ortaya çıkardı (bkz.
@@ -276,6 +279,18 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
   const defaultVariant = variants[0];
   const storageOptions = [...new Set(variants.map(v => v.storage_gb))].sort((a, b) => a - b);
 
+  // "Depolama" spek satırı: birden fazla gerçek varyant varsa (ör.
+  // ürünün nominal spec'i 128GB ama en ucuz gerçek teklif 512GB'da),
+  // sayfa İLK AÇILIŞTA da varsayılan (en ucuz) varyantın kapasitesini
+  // göstermeli — yoksa kullanıcı hiç bir seçime tıklamadan sayfayı
+  // görürse "Depolama: 128 GB" yazarken üstteki fiyat/teklif aslında
+  // 512GB'a ait olur, tutarsız görünür.
+  const displayStorageGb = hasVariantPicker ? defaultVariant.storage_gb : specs.storage_gb;
+  const specRows = SPEC_LABELS
+    .filter(([key]) => specs[key] !== undefined && specs[key] !== null)
+    .map(([key, label, fmtFn]) => `<tr><th>${esc(label)}</th><td${key === 'storage_gb' ? ' id="spec-storage-value"' : ''}>${esc(key === 'storage_gb' ? fmtFn(displayStorageGb) : fmtFn(specs[key]))}</td></tr>`)
+    .join('');
+
   // Renk seçimi TEK varyantlı ürünlerde salt bilgilendirme amaçlı —
   // kataloğumuzda o durumda renge göre ayrı fiyat/teklif yok.
   const colors = Array.isArray(specs.colors) ? specs.colors : [];
@@ -286,7 +301,7 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
       <div class="variant-group">
         <div class="variant-picker-label">Depolama</div>
         <div class="variant-pills" id="storage-pills">
-          ${storageOptions.map(gb => `<button type="button" class="variant-pill${gb === defaultVariant.storage_gb ? ' selected' : ''}" data-storage="${gb}">${gb}GB</button>`).join('')}
+          ${storageOptions.map(gb => `<button type="button" class="variant-pill${gb === defaultVariant.storage_gb ? ' selected' : ''}" data-storage="${gb}">${formatGb(gb)}</button>`).join('')}
         </div>
       </div>` : ''}
       <div class="variant-group" id="variant-color-group"></div>
@@ -303,7 +318,7 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
 
   function offerRowHTML(o) {
     const tag = hasVariantPicker && (o.storage_gb || o.color)
-      ? ` <span class="offer-variant-tag">${o.storage_gb ? o.storage_gb + 'GB' : ''}${o.storage_gb && o.color ? ', ' : ''}${esc(o.color || '')}</span>`
+      ? ` <span class="offer-variant-tag">${o.storage_gb ? formatGb(o.storage_gb) : ''}${o.storage_gb && o.color ? ', ' : ''}${esc(o.color || '')}</span>`
       : '';
     return `
     <div class="offer-row">
@@ -460,6 +475,12 @@ ${renderNav(frontendUrl)}
         return (u.protocol === 'http:' || u.protocol === 'https:') ? u.href : '#';
       } catch (e) { return '#'; }
     }
+    // Sunucu tarafındaki formatGb() ile aynı mantık — 1024'ün katı olan
+    // kapasiteleri "1TB" gibi okunaklı gösterir.
+    function formatGb(gb){
+      var n = Number(gb);
+      return (n >= 1024 && n % 1024 === 0) ? (n / 1024) + 'TB' : n + 'GB';
+    }
     // Sunucu tarafındaki colorSwatchHex() ile aynı mantık — client-side
     // tekrar yazılmak zorunda çünkü seçim değişince YENİ swatch'lar
     // burada, tarayıcıda üretiliyor.
@@ -487,7 +508,7 @@ ${renderNav(frontendUrl)}
     }
     function renderOfferRows(offerList, gb){
       offerRowsContainerEl.innerHTML = offerList.map(function(o){
-        var tag = (gb || o.color) ? ' <span class="offer-variant-tag">' + (gb ? gb + 'GB' : '') + (gb && o.color ? ', ' : '') + escHtml(o.color || '') + '</span>' : '';
+        var tag = (gb || o.color) ? ' <span class="offer-variant-tag">' + (gb ? formatGb(gb) : '') + (gb && o.color ? ', ' : '') + escHtml(o.color || '') + '</span>' : '';
         var installmentsHtml = o.installments ? '<div class="offer-installments">' + o.installments.map(function(i){ return i.months + ' x ' + fmt(i.monthlyAmount); }).join(' · ') + '</div>' : '';
         return '<div class="offer-row"><div class="offer-row-top"><div class="offer-row-info">' +
           '<span class="offer-seller">' + escHtml(o.seller_name) + tag + '</span>' +
@@ -517,7 +538,7 @@ ${renderNav(frontendUrl)}
       priceBigEl.textContent = fmt(best.price);
       sellerLineEl.textContent = best.seller_name + ' üzerinden en uygun fiyat · ' + match.offers.length + ' satıcı karşılaştırıldı';
       if (offersHeadingEl) offersHeadingEl.textContent = 'Satıcılar (' + match.offers.length + ')';
-      if (specStorageEl) specStorageEl.textContent = gb + ' GB';
+      if (specStorageEl) specStorageEl.textContent = (gb >= 1024 && gb % 1024 === 0) ? (gb / 1024) + ' TB' : gb + ' GB';
       renderOfferRows(match.offers, gb);
       if (storagePillsEl) {
         storagePillsEl.querySelectorAll('.variant-pill').forEach(function(p){
