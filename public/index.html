@@ -1,0 +1,1292 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Makulbul — Telefon Fiyat Karşılaştırma, En Ucuz Telefon Bul</title>
+<meta name="description" content="Makulbul ile iPhone, Samsung, Xiaomi ve daha fazla markanın telefon fiyatlarını Hepsiburada, Trendyol ve Amazon arasında karşılaştır; yapay zeka ile ihtiyacına en uygun, en ucuz telefonu saniyeler içinde bul.">
+<meta name="robots" content="index, follow">
+<!-- NOT: Domain henüz alınmadı — buradaki https://makulbul.com yer
+     tutucudur, gerçek alan adı netleşince canonical/og:url ve
+     JSON-LD "url" alanlarını güncelle. -->
+<link rel="canonical" href="https://makulbul.com/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Makulbul">
+<meta property="og:title" content="Makulbul — Telefon Fiyat Karşılaştırma, En Ucuz Telefon Bul">
+<meta property="og:description" content="Yapay zeka ile ihtiyacına en uygun ürünü bulan, farklı satıcıların fiyatlarını karşılaştıran akıllı fiyat karşılaştırma platformu.">
+<meta property="og:url" content="https://makulbul.com/">
+<meta property="og:image" content="og-image.png">
+<meta property="og:locale" content="tr_TR">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Makulbul — Telefon Fiyat Karşılaştırma, En Ucuz Telefon Bul">
+<meta name="twitter:description" content="Yapay zeka ile ihtiyacına en uygun ürünü bulan, farklı satıcıların fiyatlarını karşılaştıran akıllı fiyat karşılaştırma platformu.">
+<meta name="twitter:image" content="og-image.png">
+<meta name="theme-color" content="#0a0a0e">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "name": "Makulbul",
+      "url": "https://makulbul.com/",
+      "logo": "https://makulbul.com/og-image.png"
+    },
+    {
+      "@type": "WebSite",
+      "name": "Makulbul",
+      "url": "https://makulbul.com/",
+      "inLanguage": "tr-TR"
+    }
+  ]
+}
+</script>
+<!-- Bu sayfa ayrı bir statik sunucudan servis edildiği için backend'in
+     HTTP başlıkları (server.js'teki CSP dahil) buraya ulaşmıyor — o
+     yüzden aynı korumayı meta etiketiyle burada da tanımlıyoruz.
+     NOT: connect-src'teki adres API_BASE ile birebir aynı olmalı;
+     API_BASE'i canlıya alırken değiştirince burayı da güncelle. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%230a0a0e%22/><circle cx=%2216%22 cy=%2216%22 r=%227%22 fill=%22%23c8ff4d%22/></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0a0e;
+    --surface:#16171f;
+    --surface-2:#1e202b;
+    --border:#2a2c38;
+    --text:#edeef3;
+    --muted:#9a9db0;
+    --signal:#7c82ff;
+    --signal-soft:#1b1c3d;
+    --deal:#c8ff4d;
+    --deal-ink:#12140a;
+    --radius:14px;
+    --maxw:1160px;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font-family:'Inter',sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  h1,h2,h3,.display{font-family:'Space Grotesk',sans-serif}
+  .mono{font-family:'IBM Plex Mono',monospace}
+  a{color:inherit}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+
+  /* ---------- disclosure banner ---------- */
+  .demo-banner{
+    background:var(--surface);color:var(--muted);font-size:13px;text-align:center;
+    padding:9px 16px;letter-spacing:.01em;border-bottom:1px solid var(--border);
+  }
+  .demo-banner strong{color:var(--deal)}
+
+  /* ---------- nav ---------- */
+  .nav{
+    position:sticky;top:0;z-index:40;
+    background:rgba(10,10,14,.82);backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--border);
+  }
+  .nav .wrap{display:flex;align-items:center;justify-content:space-between;height:66px}
+  .logo{font-weight:700;font-size:20px;display:flex;align-items:center;gap:8px;text-decoration:none;color:var(--text)}
+  .logo .dot{width:9px;height:9px;border-radius:50%;background:var(--deal);display:inline-block}
+  .nav nav{display:flex;gap:28px}
+  .nav nav a{font-size:14px;font-weight:500;text-decoration:none;color:var(--text);opacity:.7}
+  .nav nav a:hover{opacity:1}
+  .nav-cta{
+    font-size:14px;font-weight:600;background:var(--signal);color:#fff;
+    padding:9px 16px;border-radius:999px;text-decoration:none;
+  }
+  .nav-right{display:flex;align-items:center;gap:10px}
+  .nav-burger{
+    display:none;flex-direction:column;justify-content:center;align-items:center;gap:4px;
+    width:36px;height:36px;border:1px solid var(--border);border-radius:9px;
+    background:transparent;cursor:pointer;padding:0;flex-shrink:0;
+  }
+  .nav-burger span{display:block;width:16px;height:2px;background:var(--text);border-radius:2px;transition:transform .15s,opacity .15s}
+  .nav-burger.open span:nth-child(1){transform:translateY(6px) rotate(45deg)}
+  .nav-burger.open span:nth-child(2){opacity:0}
+  .nav-burger.open span:nth-child(3){transform:translateY(-6px) rotate(-45deg)}
+  .nav-mobile{
+    display:none;flex-direction:column;padding:4px 24px 14px;border-top:1px solid var(--border);
+  }
+  .nav-mobile.open{display:flex}
+  .nav-mobile a{padding:13px 0;font-size:15px;font-weight:500;text-decoration:none;color:var(--text);border-bottom:1px solid var(--border)}
+  .nav-mobile a:last-child{border-bottom:none}
+
+  /* ---------- hero ---------- */
+  .hero{padding:72px 0 48px;position:relative;overflow:hidden}
+  .eyebrow{
+    display:inline-flex;align-items:center;gap:7px;font-size:13px;font-weight:600;
+    text-transform:uppercase;letter-spacing:.08em;color:var(--signal);
+    background:var(--signal-soft);padding:6px 12px;border-radius:999px;margin-bottom:20px;
+  }
+  .hero h1{font-size:clamp(32px,4.6vw,52px);line-height:1.08;margin:0 0 18px;max-width:760px;letter-spacing:-.01em;color:var(--text)}
+  .hero h1 em{font-style:normal;color:var(--signal)}
+  .hero p.sub{font-size:17px;color:var(--muted);max-width:580px;margin:0 0 34px;line-height:1.55}
+
+  .ai-search{
+    display:flex;gap:10px;background:var(--surface);border:1px solid var(--border);
+    padding:8px;border-radius:16px;max-width:640px;box-shadow:0 20px 50px -24px rgba(0,0,0,.6);
+  }
+  .ai-search input{
+    flex:1;border:none;outline:none;font-size:15px;padding:12px 14px;font-family:'Inter',sans-serif;
+    background:transparent;color:var(--text);
+  }
+  .ai-search input::placeholder{color:var(--muted)}
+  .ai-search button{
+    border:none;background:var(--signal);color:#fff;font-weight:600;font-size:14px;
+    padding:0 22px;border-radius:11px;cursor:pointer;transition:background .15s;
+  }
+  .ai-search button:hover{background:#9298ff}
+
+  .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px;max-width:640px}
+  .chip{
+    font-size:13px;font-weight:500;background:var(--surface);border:1px solid var(--border);
+    color:var(--text);padding:7px 13px;border-radius:999px;cursor:pointer;transition:.15s;
+  }
+  .chip:hover{border-color:var(--signal);color:var(--signal)}
+
+  .ai-pick{
+    margin-top:30px;max-width:640px;background:var(--surface);color:var(--text);border-radius:16px;
+    padding:22px 24px;display:none;border:1px solid var(--signal-soft);position:relative;overflow:hidden;
+  }
+  .ai-pick:before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:var(--deal)}
+  .ai-pick.show{display:block}
+  .ai-pick .label{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--deal);font-weight:700;margin-bottom:8px}
+  .ai-pick .name{font-size:19px;font-weight:600;margin-bottom:6px}
+  .ai-pick .reasons{list-style:none;margin:12px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+  .ai-pick .reasons li{font-size:13.5px;color:var(--muted);display:flex;gap:8px}
+  .ai-pick .reasons li:before{content:"✓";color:var(--deal);font-weight:700}
+  .ai-pick .cta{margin-top:16px;display:inline-block;background:var(--deal);color:var(--deal-ink);
+    font-weight:700;font-size:13.5px;padding:9px 16px;border-radius:9px;text-decoration:none}
+
+  /* ---------- catalog ---------- */
+  .catalog{padding:20px 0 70px}
+  .catalog-head{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;margin-bottom:18px}
+  .catalog-head h2{font-size:22px;margin:0;color:var(--text)}
+  .brand-filter{display:flex;flex-wrap:wrap;gap:6px;background:var(--surface);border:1px solid var(--border);padding:4px;border-radius:11px}
+  .brand-filter button{
+    border:none;background:transparent;font-size:13px;font-weight:600;padding:7px 13px;
+    border-radius:8px;cursor:pointer;color:var(--muted);
+  }
+  .brand-filter button.active{background:var(--signal);color:#fff}
+  .sort-filter{display:flex;align-items:center;gap:8px;margin-bottom:28px;flex-wrap:wrap}
+  .sort-filter .sort-label{font-size:12.5px;color:var(--muted);margin-right:2px}
+  .sort-filter button{
+    border:1px solid var(--border);background:transparent;font-size:12.5px;font-weight:500;
+    padding:6px 12px;border-radius:999px;cursor:pointer;color:var(--muted);
+  }
+  .sort-filter button.active{border-color:var(--signal);color:var(--signal);background:var(--signal-soft)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(268px,1fr));gap:22px;align-items:start}
+  .card{
+    background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+    padding:22px;display:flex;flex-direction:column;position:relative;transition:box-shadow .15s,transform .15s,border-color .15s;
+  }
+  .card:hover{box-shadow:0 20px 40px -24px rgba(0,0,0,.7);transform:translateY(-2px);border-color:#3a3d4d}
+  .compare-toggle{
+    position:absolute;top:18px;right:18px;width:28px;height:28px;border-radius:50%;
+    border:1px solid var(--border);background:transparent;color:var(--muted);font-size:16px;line-height:1;
+    cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.15s;
+  }
+  .compare-toggle:hover{border-color:var(--signal);color:var(--signal)}
+  .compare-toggle.active{background:var(--signal);border-color:var(--signal);color:#fff}
+  .favorite-toggle{
+    position:absolute;top:18px;left:18px;width:28px;height:28px;border-radius:50%;
+    border:1px solid var(--border);background:rgba(10,10,14,.55);color:var(--muted);
+    cursor:pointer;display:flex;align-items:center;justify-content:center;transition:.15s;z-index:2;
+  }
+  .favorite-toggle:hover{border-color:#ff6b6b;color:#ff6b6b}
+  .favorite-toggle.active{background:#ff6b6b;border-color:#ff6b6b;color:#fff}
+  .favorite-toggle svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linejoin:round}
+  .favorite-toggle.active svg{fill:currentColor}
+
+  .fav-filter-btn{
+    display:inline-flex;align-items:center;gap:6px;padding:8px 16px;border-radius:999px;
+    border:1px solid var(--border);background:transparent;color:var(--muted);font-size:14px;
+    cursor:pointer;transition:.15s;
+  }
+  .fav-filter-btn svg{width:13px;height:13px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linejoin:round}
+  .fav-filter-btn:hover{border-color:#ff6b6b;color:#ff6b6b}
+  .fav-filter-btn.active{background:#ff6b6b;border-color:#ff6b6b;color:#fff}
+  .fav-filter-btn.active svg{fill:currentColor}
+
+  .empty-state{color:var(--muted);font-size:15px;padding:48px 0;text-align:center;grid-column:1/-1}
+
+  .card-link{color:inherit;text-decoration:none;display:block}
+  .card-link:hover h3{color:var(--signal)}
+
+  .card-thumb{
+    width:100%;height:86px;border-radius:11px;margin-bottom:16px;flex-shrink:0;
+    background:radial-gradient(circle at 30% 24%, var(--signal-soft), var(--bg) 72%);
+    border:1px solid var(--border);
+    display:flex;align-items:center;justify-content:center;
+  }
+  .thumb-svg{width:32px;height:32px}
+  .thumb-svg .thumb-body{fill:none;stroke:var(--signal);stroke-width:2}
+  .thumb-svg .thumb-screen{fill:var(--signal-soft)}
+  .thumb-svg .thumb-detail{fill:var(--signal)}
+
+  .brand-badge{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--signal);display:block;margin-bottom:6px;transition:color .15s}
+  .card-link h3{transition:color .15s}
+  .card h3{font-size:17px;margin:0 0 10px;line-height:1.3;color:var(--text);padding-right:30px}
+  .spec-line{font-size:13px;color:var(--muted);font-family:'IBM Plex Mono',monospace;margin-bottom:8px}
+  .nfc-badge{
+    display:inline-block;font-size:11px;font-weight:700;color:#aab0ff;background:var(--signal-soft);
+    padding:3px 9px;border-radius:6px;margin-bottom:16px;
+  }
+  .card-colors{display:flex;align-items:center;gap:5px;margin:0 0 16px;flex-wrap:wrap}
+  .card-color-dot{width:14px;height:14px;border-radius:50%;border:1px solid rgba(255,255,255,.15);flex-shrink:0}
+  .card-colors-more{font-size:11px;color:var(--muted)}
+
+  /* GB + renk seçici (birden fazla gerçek varyant kombinasyonu olan
+     ürünlerde statik renk noktalarının yerine geçer) */
+  .card-variant-picker{margin:0 0 16px;display:flex;flex-direction:column;gap:8px}
+  .card-storage-pills{display:flex;gap:6px;flex-wrap:wrap}
+  .card-variant-pill{
+    background:var(--surface-2);border:1px solid var(--border);color:var(--text);
+    font-size:11px;font-weight:600;padding:4px 10px;border-radius:7px;cursor:pointer;
+    font-family:'IBM Plex Mono',monospace;
+  }
+  .card-variant-pill.selected{border-color:var(--signal);background:var(--signal-soft);color:var(--signal)}
+  .card-color-swatches{display:flex;gap:5px;flex-wrap:wrap}
+  .card-color-dot-btn{display:inline-block;padding:0;margin:0;cursor:pointer;box-sizing:border-box;appearance:none;-webkit-appearance:none}
+  .card-color-dot-btn.selected{border-color:var(--signal);border-width:2px}
+  .offer-variant-tag{font-size:10.5px;color:var(--muted);font-weight:500;font-family:'IBM Plex Mono',monospace}
+  .price-block{margin-top:auto;border-top:1px solid var(--border);padding-top:16px}
+  .price-row{display:flex;justify-content:space-between;align-items:baseline}
+  .price{font-family:'IBM Plex Mono',monospace;font-size:23px;font-weight:600;color:var(--text)}
+  .best-tag{font-size:10.5px;font-weight:700;background:var(--deal);color:var(--deal-ink);padding:3px 7px;border-radius:6px;text-transform:uppercase}
+  .lowest-badge{display:flex;align-items:center;gap:5px;margin-top:8px;font-size:11px;font-weight:600;color:var(--deal)}
+  .lowest-badge .lowest-icon{width:12px;height:12px;flex-shrink:0;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+  .seller-line{font-size:12.5px;color:var(--muted);margin-top:4px}
+
+  .card-actions{display:flex;gap:4px;margin-top:14px;background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:4px}
+  .card-action{
+    flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;min-width:0;
+    border:none;background:transparent;color:var(--muted);font-size:10.5px;font-weight:600;
+    padding:8px 2px 7px;border-radius:7px;cursor:pointer;transition:background .15s,color .15s;
+    font-family:'Inter',sans-serif;
+  }
+  .card-action .ca-icon{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+  .card-action:hover{color:var(--text);background:var(--surface-2)}
+  .card-action.active{color:var(--signal);background:var(--signal-soft)}
+  .card-action span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+
+  .offers-list{display:none;flex-direction:column;gap:7px;margin-top:10px}
+  .offers-list.open{display:flex}
+  .offer-item{font-size:12.5px;background:var(--bg);padding:9px 11px;border-radius:8px;color:var(--text)}
+  .offer-item-out{opacity:.55}
+  .stock-badge{font-size:9.5px;font-weight:700;color:#ff6b6b;text-transform:uppercase;letter-spacing:.03em}
+  .offer-item-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .offer-item .op{font-family:'IBM Plex Mono',monospace;font-weight:600;white-space:nowrap}
+  .offer-cta{display:flex;align-items:center;gap:6px;margin-top:8px}
+  .ad-tag{font-size:9.5px;font-weight:600;color:var(--muted);border:1px solid var(--border);padding:2px 6px;border-radius:5px;text-transform:uppercase;letter-spacing:.03em}
+
+  .price-history{display:none;margin-top:10px;background:var(--bg);border-radius:8px;padding:11px 12px}
+  .price-history.open{display:block}
+  .history-loading{font-size:12px;color:var(--muted);margin:0;padding:2px 0}
+
+
+  .cookie-banner{
+    position:fixed;bottom:0;left:0;right:0;z-index:70;
+    background:var(--surface);border-top:1px solid var(--border);
+    padding:16px 24px;display:flex;align-items:center;justify-content:center;
+    gap:20px;flex-wrap:wrap;
+  }
+  .cookie-banner.hidden{display:none}
+  .cookie-banner p{margin:0;font-size:13px;color:var(--muted);max-width:640px}
+  .cookie-banner a{color:var(--signal);text-decoration:underline}
+  .cookie-banner button{
+    border:none;background:var(--deal);color:var(--deal-ink);font-weight:700;
+    font-size:13px;padding:9px 18px;border-radius:9px;cursor:pointer;white-space:nowrap;
+  }
+  .offer-item a{
+    font-size:11.5px;font-weight:700;background:var(--signal);color:#fff;padding:5px 10px;border-radius:6px;text-decoration:none;
+  }
+  .offer-item a:hover{background:#9298ff}
+
+  /* ---------- how it works ---------- */
+  .how{padding:60px 0;background:var(--surface);border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+  .how h2{font-size:26px;margin:0 0 34px;max-width:480px;color:var(--text)}
+  .how-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:26px}
+  .step{padding-top:14px;border-top:2px solid var(--signal)}
+  .step .num{font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--signal);font-weight:600}
+  .step h3{font-size:17px;margin:10px 0 8px;color:var(--text)}
+  .step p{font-size:14px;color:var(--muted);line-height:1.55;margin:0}
+
+  /* ---------- trust ---------- */
+  .trust{padding:50px 0;text-align:center}
+  .trust .stat-row{display:flex;justify-content:center;gap:48px;flex-wrap:wrap;margin:20px 0 26px}
+  .trust .stat{display:flex;flex-direction:column;gap:2px}
+  .trust .stat .num{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:26px;color:var(--deal)}
+  .trust .stat .lbl{font-size:12.5px;color:var(--muted)}
+  .trust p.note{font-size:12.5px;color:var(--muted);max-width:580px;margin:0 auto;line-height:1.6}
+
+  /* ---------- about ---------- */
+  .about{padding:60px 0;background:var(--surface);border-top:1px solid var(--border)}
+  .about .wrap{display:grid;grid-template-columns:1fr 1fr;gap:40px}
+  .about h2{font-size:24px;margin:0 0 14px;color:var(--text)}
+  .about p{font-size:14.5px;line-height:1.7;color:var(--muted);margin:0 0 14px}
+  .about h4{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--deal);margin:0 0 10px}
+
+  /* ---------- footer ---------- */
+  footer{padding:36px 0;font-size:13px;color:var(--muted);border-top:1px solid var(--border)}
+  footer .wrap{display:flex;justify-content:space-between;flex-wrap:wrap;gap:14px}
+  footer a{text-decoration:none;margin-right:16px}
+  footer a:hover{color:var(--signal)}
+
+  /* ---------- compare bar & modal ---------- */
+  .compare-bar{
+    position:fixed;bottom:calc(20px + var(--cookie-offset, 0px));left:50%;transform:translateX(-50%);
+    background:var(--surface-2);color:var(--text);border:1px solid var(--border);padding:12px 14px 12px 20px;border-radius:14px;
+    display:flex;align-items:center;gap:14px;box-shadow:0 20px 50px -20px rgba(0,0,0,.7);z-index:50;
+    transition:bottom .15s;
+  }
+  .compare-bar.hidden{display:none}
+  .compare-bar button{border:none;border-radius:9px;font-weight:700;font-size:13px;padding:9px 14px;cursor:pointer}
+  .compare-bar .go{background:var(--deal);color:var(--deal-ink)}
+  .compare-bar .clear{background:transparent;color:var(--muted)}
+
+  .modal-overlay{
+    position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:60;
+    display:flex;align-items:center;justify-content:center;padding:20px;
+  }
+  .modal-overlay.hidden{display:none}
+  .modal{background:var(--surface);border:1px solid var(--border);border-radius:16px;max-width:760px;width:100%;max-height:82vh;overflow:auto;padding:26px}
+  .modal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+  .modal-head h3{margin:0;font-size:19px;color:var(--text)}
+  .modal-head button{border:none;background:var(--bg);color:var(--text);width:32px;height:32px;border-radius:50%;cursor:pointer;font-size:16px}
+  table.compare-table{width:100%;border-collapse:collapse;font-size:13.5px}
+  table.compare-table th,table.compare-table td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--border);color:var(--text)}
+  table.compare-table th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.03em}
+  table.compare-table td.pval{font-family:'IBM Plex Mono',monospace}
+
+  @media (max-width:760px){
+    .nav nav{display:none}
+    .nav-burger{display:flex}
+    .how-steps{grid-template-columns:1fr}
+    .about .wrap{grid-template-columns:1fr}
+    .trust .stat-row{gap:28px}
+  }
+</style>
+</head>
+<body>
+
+<div class="demo-banner">Ürün ve özellik verileri <strong>güncel modelleri</strong> yansıtır — fiyatlar yaklaşık/anlık görüntüdür, canlı sistemde gerçek zamanlı güncellenir.</div>
+
+<header class="nav">
+  <div class="wrap">
+    <a href="#hero" class="logo"><span class="dot"></span>Makulbul</a>
+    <nav>
+      <a href="#catalog">Telefonlar</a>
+      <a href="#how">Nasıl Çalışır</a>
+      <a href="#about">Hakkımızda</a>
+      <a href="#contact">İletişim</a>
+    </nav>
+    <div class="nav-right">
+      <a class="nav-cta" href="#catalog">Telefon Bul</a>
+      <button class="nav-burger" id="navBurger" aria-label="Menüyü aç" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </div>
+  <div class="nav-mobile" id="navMobile" role="navigation" aria-label="Mobil menü">
+    <a href="#catalog">Telefonlar</a>
+    <a href="#how">Nasıl Çalışır</a>
+    <a href="#about">Hakkımızda</a>
+    <a href="#contact">İletişim</a>
+  </div>
+</header>
+
+<section class="hero" id="hero">
+  <div class="wrap">
+    <span class="eyebrow">● Yapay zeka destekli fiyat karşılaştırma</span>
+    <h1>İhtiyacını yaz, <em>en ucuz telefonu</em><br>en uygun satıcıdan bulalım.</h1>
+    <p class="sub">Onlarca siteyi tek tek gezmek yerine, ne istediğini bize söyle — bütçeni ve önemli özelliklerini yapay zeka ile karşılaştırıp sana en mantıklı seçeneği gösterelim. Telefon kategorisiyle başlıyoruz, katalog ve kategoriler zamanla büyüyecek.</p>
+
+    <div class="ai-search">
+      <input id="aiInput" type="text" placeholder="örn. NFC'li, 25.000 TL altı, kamerası iyi bir telefon" />
+      <button id="aiBtn">Ara</button>
+    </div>
+    <div class="chips" id="quickChips">
+      <button class="chip" data-q="NFC'li 20.000 TL altı">NFC'li · 20.000 TL altı</button>
+      <button class="chip" data-q="kamerası iyi 40.000 TL altı">Kamera odaklı · 40.000 TL altı</button>
+      <button class="chip" data-q="pili uzun giden ucuz telefon">Uzun pilli · Ekonomik</button>
+      <button class="chip" data-q="en güçlü telefon">En güçlü model</button>
+      <button class="chip" data-q="hafif ve kompakt telefon">Hafif · Kompakt</button>
+      <button class="chip" data-q="hızlı şarj olan telefon">Hızlı Şarj</button>
+      <button class="chip" data-q="kablosuz şarj destekleyen telefon">Kablosuz Şarj</button>
+    </div>
+
+    <div class="ai-pick" id="aiPick">
+      <div class="label">AI Önerisi</div>
+      <div class="name" id="aiPickName"></div>
+      <ul class="reasons" id="aiPickReasons"></ul>
+      <a class="cta" id="aiPickCta" href="#" target="_blank" rel="nofollow sponsored noopener">En uygun teklifi gör →</a>
+      <span class="ad-tag" style="margin-left:8px;vertical-align:middle">Reklam</span>
+    </div>
+  </div>
+</section>
+
+<section class="catalog" id="catalog">
+  <div class="wrap">
+    <div class="catalog-head">
+      <h2>Tüm modeller</h2>
+      <div class="brand-filter" id="brandFilter">
+        <button class="active" data-brand="all">Tümü</button>
+        <button data-brand="Apple">Apple</button>
+        <button data-brand="Samsung">Samsung</button>
+        <button data-brand="Xiaomi">Xiaomi</button>
+        <button data-brand="Google">Google</button>
+        <button data-brand="OnePlus">OnePlus</button>
+        <button data-brand="Sony">Sony</button>
+        <button data-brand="Honor">Honor</button>
+      </div>
+      <button class="fav-filter-btn" id="favFilterBtn" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13.8s-5.6-3.4-5.6-7.3A3.1 3.1 0 0 1 8 4.6a3.1 3.1 0 0 1 5.6 1.9c0 3.9-5.6 7.3-5.6 7.3Z"/></svg><span>Favorilerim</span></button>
+    </div>
+    <div class="sort-filter" id="sortFilter">
+      <span class="sort-label">Sırala:</span>
+      <button class="active" data-sort="price-asc">En Uygun Fiyat</button>
+      <button data-sort="battery-desc">Pil Süresi</button>
+      <button data-sort="camera-desc">Kamera</button>
+    </div>
+    <div class="grid" id="grid"></div>
+  </div>
+</section>
+
+<section class="how" id="how">
+  <div class="wrap">
+    <h2>Makulbul nasıl çalışır</h2>
+    <div class="how-steps">
+      <div class="step">
+        <div class="num">01</div>
+        <h3>İhtiyacını yaz</h3>
+        <p>Bütçe, NFC, kamera veya pil gibi senin için önemli olanı normal cümleyle yaz — teknik terim bilmene gerek yok.</p>
+      </div>
+      <div class="step">
+        <div class="num">02</div>
+        <h3>AI karşılaştırır</h3>
+        <p>Yapay zeka, aynı ürünün farklı sitelerdeki tüm fiyatlarını ve teknik özelliklerini tarayıp senin kriterlerine en uygun modeli seçer.</p>
+      </div>
+      <div class="step">
+        <div class="num">03</div>
+        <h3>En uygun satıcıya git</h3>
+        <p>Seçilen ürünü en ucuza satan güvenilir satıcının sayfasına tek tıkla git, oradan satın al.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="trust">
+  <div class="wrap">
+    <div class="stat-row">
+      <div class="stat"><span class="num">48</span><span class="lbl">telefon modeli</span></div>
+      <div class="stat"><span class="num">10</span><span class="lbl">satıcı takip ediliyor</span></div>
+      <div class="stat"><span class="num">1</span><span class="lbl">yapay zeka asistanı</span></div>
+    </div>
+    <p class="note">Makulbul, ürünleri kendisi satmaz; fiyat ve stok bilgilerini satıcı sitelerinden derler. Şu an telefon kategorisiyle başlıyoruz, kapsamı zamanla genişletiyoruz. Bazı bağlantılar iştirak (affiliate) bağlantısı olabilir — bunu satın alma öncesi açıkça belirtiriz ve bu durum senin ödediğin fiyatı değiştirmez.</p>
+  </div>
+</section>
+
+<section class="about" id="about">
+  <div class="wrap">
+    <div>
+      <h4>Hakkımızda</h4>
+      <h2>Doğru ürünü bulmak zor olmamalı</h2>
+      <p>Makulbul, alışveriş yaparken onlarca siteyi tek tek gezmek zorunda kalmadan, ihtiyacına göre en mantıklı seçeneği bulman için kuruldu. Telefon kategorisiyle başlıyoruz; hem katalogdaki markaları hem de ürün kategorilerini zamanla genişleteceğiz.</p>
+    </div>
+    <div>
+      <h4>Metodoloji</h4>
+      <p>Fiyat ve teknik özellik verileri düzenli aralıklarla satıcı sitelerinden toplanır. Aynı ürün, farklı sitelerde farklı isimlerle görünse bile sistemimiz bunları tek bir ürün altında birleştirir, böylece gerçek fiyat karşılaştırması yapılabilir.</p>
+      <p>Reklam veya sponsorluk, önerilen sıralamayı etkilemez; sıralama yalnızca fiyat ve senin belirttiğin kritere göre yapılır.</p>
+    </div>
+  </div>
+</section>
+
+<footer id="contact">
+  <div class="wrap">
+    <div><strong>Makulbul</strong> — akıllı fiyat karşılaştırma · © 2026</div>
+    <div>
+      <a href="#about">Hakkımızda</a>
+      <a href="gizlilik-politikasi.html">Gizlilik Politikası</a>
+      <a href="kullanim-sartlari.html">Kullanım Şartları</a>
+      <a href="mailto:iletisim@makulbul.com">iletisim@makulbul.com</a>
+    </div>
+  </div>
+</footer>
+
+<div class="compare-bar hidden" id="compareBar">
+  <span><span id="compareCount">0</span> ürün seçildi</span>
+  <button class="go" id="compareGo">Karşılaştır</button>
+  <button class="clear" id="compareClear">Temizle</button>
+</div>
+
+<div class="modal-overlay hidden" id="modalOverlay">
+  <div class="modal">
+    <div class="modal-head">
+      <h3>Karşılaştırma</h3>
+      <button id="modalClose" aria-label="Karşılaştırma penceresini kapat">✕</button>
+    </div>
+    <div id="modalBody"></div>
+  </div>
+</div>
+
+<div class="cookie-banner hidden" id="cookieBanner">
+  <p>Bu site, tercihini hatırlamak için tarayıcında bir kayıt tutar; ayrıca kimliksiz, sadece hangi sayfanın ne zaman görüntülendiğini içeren anonim kullanım istatistiği toplar. Detaylar için <a href="gizlilik-politikasi.html">Gizlilik Politikası</a>'na bakabilirsin.</p>
+  <button id="cookieAccept">Anladım</button>
+</div>
+
+<script>
+/* ================= BACKEND BAĞLANTISI =================
+   Bu dosya artık backend'in kendisi tarafından (public/ klasöründen)
+   AYNI origin'den sunuluyor — bu yüzden API_BASE boş bırakılıyor,
+   ${API_BASE}/api/products gibi çağrılar otomatik olarak göreceli
+   (/api/products) hale geliyor, hangi domain'de çalışırsa çalışsın
+   (localhost:3000 ya da canlı domain) doğru adrese gider. Bu dosyanın
+   AYRI portlarda (frontend:5500 + backend:3000) çalıştırılan yerel
+   geliştirme kopyası — ../cepfiyat-frontend/index.html — hâlâ sabit
+   'http://localhost:3000' kullanıyor, bu ikisi kasıtlı olarak farklı. */
+const API_BASE = '';
+
+let PHONES = [];
+
+// Backend'den gelen ürün formatını (specs JSONB içinde) sitenin
+// beklediği düz alanlara çevirir.
+function mapApiProduct(apiProduct){
+  const s = apiProduct.specs || {};
+  return {
+    id: apiProduct.id,
+    brand: apiProduct.brand,
+    name: apiProduct.canonical_name,
+    ram: s.ram_gb, storage: s.storage_gb, screen: s.screen_inch,
+    refreshRate: s.refresh_rate_hz,
+    battery: s.battery_mah, chip: s.chip, camera: s.main_camera_mp,
+    nfc: !!s.has_nfc, g5: !!s.has_5g, year: s.release_year,
+    weight: s.weight_g, ipRating: s.ip_rating,
+    wiredWatts: s.wired_charging_watts, wirelessWatts: s.wireless_charging_watts,
+    frontCamera: s.front_camera_mp, ultraWide: s.ultra_wide_mp,
+    telephoto: s.telephoto_mp, zoomX: s.optical_zoom_x,
+    screenNits: s.screen_nits, buildMaterial: s.build_material,
+    stereoSpeakers: !!s.has_stereo_speakers,
+    isFoldable: !!s.is_foldable, foldStyle: s.fold_style,
+    stylusSupport: !!s.has_stylus_support, simType: s.sim_type,
+    biometricUnlock: s.biometric_unlock, irBlaster: !!s.has_ir_blaster,
+    video8k: !!s.video_8k, satellite: !!s.satellite_connectivity,
+    headphoneJack: !!s.has_headphone_jack, expandableStorage: !!s.has_expandable_storage,
+    cameraButton: !!s.has_camera_button,
+    colors: Array.isArray(s.colors) ? s.colors : [],
+    minPrice30d: apiProduct.min_price_30d != null ? Number(apiProduct.min_price_30d) : null,
+    offers: (apiProduct.offers || []).map(o => ({
+      id: o.id,
+      seller: o.seller_name, price: Number(o.price),
+      inStock: o.in_stock !== false,
+      color: o.color || '',
+      storageGb: Number(o.storage_gb) || 0,
+    })),
+  };
+}
+
+async function loadProducts(){
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '<p style="color:var(--muted);grid-column:1/-1">Ürünler yükleniyor...</p>';
+  try {
+    const res = await fetch(`${API_BASE}/api/products`);
+    if(!res.ok) throw new Error('API hatası: ' + res.status);
+    const data = await res.json();
+    PHONES = data.map(mapApiProduct);
+    renderGrid();
+  } catch (err) {
+    console.error(err);
+    grid.innerHTML = `<p style="color:var(--muted);grid-column:1/-1">
+      Ürünler yüklenemedi. Backend sunucusu (${API_BASE}) çalışıyor mu kontrol et.
+      </p>`;
+  }
+}
+
+
+const fmt = n => n.toLocaleString('tr-TR') + ' TL';
+// stokta olan teklifleri önceliklendir — hiçbiri stokta değilse yine de
+// bir şey göstermek daha iyi olduğu için tüm tekliflere geri düş
+const inStockFirst = offers => {
+  const inStock = offers.filter(o => o.inStock);
+  return inStock.length ? inStock : offers;
+};
+// Artık teklifler sadece Hepsiburada/Trendyol/Amazon TR'den geliyor —
+// bir ürünün üçünde de teklifi olmaması (satışta olmaması) gerçek bir
+// durum, boş dizi üzerinde .reduce() bunu ele almadan çökerdi. null
+// dönüyor, çağıran taraflar bunu "satışta değil" olarak ele almalı.
+const minOffer = p => p.offers.length ? inStockFirst(p.offers).reduce((a,b)=>a.price<b.price?a:b) : null;
+
+// Ürün detay sayfası (backend'de SSR edilen /urun/:id/:slug) linkleri
+// için — slug tamamen kozmetik, backend zaten :id'ye göre arıyor.
+function slugify(text){
+  return (text||'').toString().toLowerCase()
+    .replace(/ı/g,'i').replace(/ğ/g,'g').replace(/ü/g,'u')
+    .replace(/ş/g,'s').replace(/ö/g,'o').replace(/ç/g,'c')
+    .replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'');
+}
+
+// canonical_name içindeki depolama kapasitesini ("256GB", "1 TB" vb.)
+// kart başlığından çıkarır — artık kapasite GB seçicisiyle SEÇİLEBİLİR
+// bir seçenek (bkz. cardVariantPickerHTML), o yüzden ana başlıkta
+// sadece marka+model kalmalı. product-page.js'teki displayModelName
+// ile AYNI mantık — sadece kapasite token'ını kaldırıyor, "iPhone 13
+// mini" gibi model adının parçası olan sayılara ya da "NFC"/"5G" gibi
+// diğer SKU etiketlerine dokunmuyor (onlar seçilebilir birer seçenek
+// değil, modelin sabit bir parçası).
+function displayModelName(name){
+  return String(name || '')
+    .replace(/\s*\b\d+\s?(GB|TB)\b/i, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+// product-page.js'teki formatGb() ile aynı mantık — 1024'ün katı olan
+// kapasiteleri ("1TB" gibi araştırmadan gelen gerçek teklifler) okunaklı
+// gösterir, diğer değerler ("256", "512") olduğu gibi "NNNGB" kalır.
+function formatGb(gb){
+  const n = Number(gb);
+  return (n >= 1024 && n % 1024 === 0) ? (n / 1024) + 'TB' : n + 'GB';
+}
+
+// Savunma derinliği: ürün adı/marka/satıcı/çip gibi metinler bugün
+// sadece admin tarafından girilen verilerden geliyor, ama ileride bir
+// scraper/feed bu alanları daha az sıkı doğrulamayla doldurursa (ya da
+// biri veritabanına doğrudan yazarsa) HTML olarak enjekte edilmesinler
+// diye innerHTML'e basmadan önce hepsini kaçırıyoruz — product-page.js
+// (SSR sayfası) zaten aynısını yapıyordu, burada da tutarlı olsun.
+function escHtml(str){
+  return String(str ?? '').replace(/[&<>"']/g, c => (
+    { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]
+  ));
+}
+
+// Renk isminden yaklaşık bir gösterim rengi çıkarır (product-page.js'teki
+// colorSwatchHex ile aynı mantık — marka rengiyle birebir aynı olması
+// şart değil, sadece görsel bir ipucu).
+function colorSwatchHex(name){
+  const n = name.toLowerCase();
+  if (n.includes('siyah') || n.includes('obsidyen') || n.includes('gece') || n.includes('arduvaz')) return '#1c1c1e';
+  if (n.includes('beyaz') || n.includes('porselen') || n.includes('bulut')) return '#f2f1ed';
+  if (n.includes('mavi') || n.includes('lacivert') || n.includes('indigo') || n.includes('gökyüzü') || n.includes('gelgit')) return '#3d6ea5';
+  if (n.includes('kırmızı') || n.includes('mercan') || n.includes('red')) return '#c0392b';
+  if (n.includes('yeşil') || n.includes('yosun') || n.includes('yeşim') || n.includes('adaçayı') || n.includes('zeytin') || n.includes('limon otu')) return '#5c7d5a';
+  if (n.includes('sarı')) return '#d8c22c';
+  if (n.includes('mor') || n.includes('lavanta') || n.includes('orkide') || n.includes('kobalt')) return '#7b5ea7';
+  if (n.includes('pembe') || n.includes('rose')) return '#dfa3b5';
+  if (n.includes('turkuaz')) return '#2a9d8f';
+  if (n.includes('turuncu')) return '#d9782d';
+  if (n.includes('altın') || n.includes('gold')) return '#c9a86a';
+  if (n.includes('gümüş') || n.includes('silver')) return '#c7c7c9';
+  if (n.includes('gri') || n.includes('grafit') || n.includes('antrasit') || n.includes('titanyum')) return '#8a8a8e';
+  if (n.includes('bej')) return '#d8c6a8';
+  return '#9a9a9a';
+}
+
+/* ================= RENDER GRID ================= */
+let currentBrand = 'all';
+let currentSort = 'price-asc';
+let showFavoritesOnly = false;
+const compareSet = new Set();
+
+/* ================= FAVORİLER (localStorage, hesap gerektirmez) ================= */
+const FAVORITES_KEY = 'makulbul_favorites';
+function loadFavorites(){
+  try {
+    const raw = JSON.parse(localStorage.getItem(FAVORITES_KEY) || '[]');
+    return new Set(Array.isArray(raw) ? raw : []);
+  } catch {
+    return new Set();
+  }
+}
+function saveFavorites(){
+  try {
+    localStorage.setItem(FAVORITES_KEY, JSON.stringify([...favoritesSet]));
+  } catch {
+    // localStorage kapalı/dolu olabilir — favoriler o oturumda kaybolur ama site çökmez
+  }
+}
+const favoritesSet = loadFavorites();
+
+// Satışta olmayan (minOffer() null dönen) ürünler fiyata göre
+// sıralarken HANGİ yönde sıralanırsa sıralansın her zaman en sona
+// düşer — "satılmıyor"un "en ucuz" ya da "en pahalı" sayılmasının
+// hiçbir anlamı yok.
+function priceSortCompare(a, b, ascending){
+  const pa = minOffer(a)?.price, pb = minOffer(b)?.price;
+  if (pa == null && pb == null) return 0;
+  if (pa == null) return 1;
+  if (pb == null) return -1;
+  return ascending ? pa - pb : pb - pa;
+}
+function sortPhones(list){
+  const l = [...list];
+  if(currentSort==='price-asc') l.sort((a,b)=>priceSortCompare(a,b,true));
+  if(currentSort==='price-desc') l.sort((a,b)=>priceSortCompare(a,b,false));
+  if(currentSort==='battery-desc') l.sort((a,b)=>b.battery-a.battery);
+  if(currentSort==='camera-desc') l.sort((a,b)=>b.camera-a.camera);
+  return l;
+}
+
+function renderGrid(overrideList){
+  const grid = document.getElementById('grid');
+  let list;
+  if(overrideList){
+    list = overrideList;
+  } else {
+    list = PHONES.filter(p=>currentBrand==='all'||p.brand===currentBrand);
+    if(showFavoritesOnly) list = list.filter(p=>favoritesSet.has(p.id));
+    list = sortPhones(list);
+  }
+  grid.innerHTML = list.length
+    ? list.map(cardHTML).join('')
+    : (showFavoritesOnly
+        ? '<p class="empty-state">Henüz favori ürünün yok — bir ürünün üzerindeki kalp ikonuna basarak ekleyebilirsin.</p>'
+        : '<p class="empty-state">Bu kritere uyan ürün bulunamadı.</p>');
+  if(!list.length) return;
+
+  list.forEach(p=>{
+    const toggle = document.getElementById('toggle-'+p.id);
+    const offersList = document.getElementById('offers-'+p.id);
+    const historyToggle = document.getElementById('history-toggle-'+p.id);
+    const historyBox = document.getElementById('history-'+p.id);
+
+    // Satıcılar/Geçmiş panelleri bir akordeon gibi davranıyor —
+    // aynı anda sadece biri açık olabilir, birine basınca diğerleri kapanır.
+    const panelGroup = [
+      { btn: toggle, panel: offersList },
+      { btn: historyToggle, panel: historyBox },
+    ].filter(g => g.btn && g.panel);
+    function closeSiblingPanels(exceptBtn){
+      panelGroup.forEach(g => {
+        if(g.btn !== exceptBtn && g.panel.classList.contains('open')){
+          g.panel.classList.remove('open');
+          g.btn.classList.remove('active');
+        }
+      });
+    }
+
+    if(toggle){
+      toggle.addEventListener('click',()=>{
+        const willOpen = !offersList.classList.contains('open');
+        closeSiblingPanels(toggle);
+        offersList.classList.toggle('open', willOpen);
+        toggle.classList.toggle('active', willOpen);
+      });
+    }
+    const cmp = document.getElementById('cmp-'+p.id);
+    const isActive = compareSet.has(p.id);
+    cmp.classList.toggle('active', isActive);
+    cmp.textContent = isActive ? '✓' : '+';
+    cmp.addEventListener('click',()=>{
+      if(compareSet.has(p.id)){
+        compareSet.delete(p.id);
+      } else {
+        if(compareSet.size>=3) return;
+        compareSet.add(p.id);
+      }
+      cmp.classList.toggle('active');
+      cmp.textContent = compareSet.has(p.id) ? '✓' : '+';
+      updateCompareBar();
+    });
+
+    const fav = document.getElementById('fav-'+p.id);
+    fav.classList.toggle('active', favoritesSet.has(p.id));
+    fav.addEventListener('click',()=>{
+      if(favoritesSet.has(p.id)){
+        favoritesSet.delete(p.id);
+      } else {
+        favoritesSet.add(p.id);
+      }
+      saveFavorites();
+      if(showFavoritesOnly){
+        renderGrid();
+      } else {
+        fav.classList.toggle('active', favoritesSet.has(p.id));
+      }
+    });
+
+    if(historyToggle){
+      historyToggle.addEventListener('click', ()=>{
+        closeSiblingPanels(historyToggle);
+        toggleHistory(p);
+      });
+    }
+
+    // GB/renk seçici (yalnızca birden fazla gerçek varyant kombinasyonu
+    // olan ürünlerde DOM'da bulunuyor) — seçime göre fiyat/satıcı/stok
+    // bilgisini selectCardVariant() ile anlık günceller.
+    const variants = variantsFor(p);
+    if (variants.length > 1) {
+      const defaultVariant = variants[0];
+      const storagePills = document.getElementById('storage-pills-'+p.id);
+      if (storagePills) {
+        storagePills.querySelectorAll('.card-variant-pill').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const gb = Number(btn.dataset.storage);
+            const vs = variants.filter(v => v.storageGb === gb);
+            selectCardVariant(p, gb, vs[0].color);
+          });
+        });
+      }
+      const colorSwatches = document.getElementById('color-swatches-'+p.id);
+      if (colorSwatches) {
+        colorSwatches.querySelectorAll('.card-color-dot-btn').forEach(btn => {
+          btn.addEventListener('click', () => selectCardVariant(p, defaultVariant.storageGb, btn.dataset.color));
+        });
+      }
+    }
+  });
+}
+
+/* ================= FİYAT GEÇMİŞİ ================= */
+// Gerçek bir fiyat geçmişi verisi henüz yok (görülen "geçmiş" önceden
+// simüle edilmiş/tohum veriydi) — yanıltıcı olmaması için grafik yerine
+// dürüstçe "Yakında" gösteriliyor. API'den veri çekmiyoruz artık.
+function toggleHistory(p){
+  const container = document.getElementById('history-'+p.id);
+  const btn = document.getElementById('history-toggle-'+p.id);
+  if(!container || !btn) return;
+
+  if(container.classList.contains('open')){
+    container.classList.remove('open');
+    btn.classList.remove('active');
+    return;
+  }
+
+  container.classList.add('open');
+  btn.classList.add('active');
+  container.innerHTML = '<p class="history-loading">Yakında</p>';
+}
+
+const THUMB_SVG = `<svg viewBox="0 0 64 64" class="thumb-svg" aria-hidden="true">
+  <rect class="thumb-body" x="20" y="6" width="24" height="52" rx="7"/>
+  <rect class="thumb-screen" x="24" y="12.5" width="16" height="33" rx="1.5"/>
+  <rect class="thumb-detail" x="27" y="8.5" width="10" height="1.8" rx=".9"/>
+  <circle class="thumb-detail" cx="32" cy="50.5" r="1.7"/>
+</svg>`;
+
+const ICON_STORE = `<svg viewBox="0 0 16 16" class="ca-icon" aria-hidden="true"><path d="M8.5 1.5H3a1.5 1.5 0 0 0-1.5 1.5v5.5a1.5 1.5 0 0 0 .44 1.06l6 6a1.5 1.5 0 0 0 2.12 0l4.94-4.94a1.5 1.5 0 0 0 0-2.12l-6-6A1.5 1.5 0 0 0 8.5 1.5Z"/><circle cx="5.25" cy="5.25" r=".9"/></svg>`;
+const ICON_HISTORY = `<svg viewBox="0 0 16 16" class="ca-icon" aria-hidden="true"><path d="M1.5 12.5 6 7l3 3 5.5-6.5"/><path d="M11 3.5h3.5V7"/></svg>`;
+const ICON_LOWEST = `<svg viewBox="0 0 16 16" class="lowest-icon" aria-hidden="true"><path d="M8 2.5v9"/><path d="M4.5 8 8 11.5 11.5 8"/></svg>`;
+const ICON_HEART = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13.8s-5.6-3.4-5.6-7.3A3.1 3.1 0 0 1 8 4.6a3.1 3.1 0 0 1 5.6 1.9c0 3.9-5.6 7.3-5.6 7.3Z"/></svg>`;
+
+// En fazla 5 renk noktası + varsa "+N" göster — kart zaten dar, tüm renk
+// isimlerini yazı olarak sığdırmak yerine küçük renk noktaları yeterli
+// (tam liste ürün detay sayfasında, seçilebilir olarak gösteriliyor).
+function colorDotsHTML(colors){
+  if (!colors || !colors.length) return '';
+  const shown = colors.slice(0, 5);
+  const extra = colors.length - shown.length;
+  return `<div class="card-colors">
+    ${shown.map(c => `<span class="card-color-dot" style="background:${colorSwatchHex(c)}" title="${escHtml(c)}"></span>`).join('')}
+    ${extra > 0 ? `<span class="card-colors-more">+${extra}</span>` : ''}
+  </div>`;
+}
+
+// Kartta gösterilecek renkleri belirler. Bazı ürünlerde artık teklifler
+// gerçek (araştırılmış) bir renk taşıyor — bu durumda kart, ürünün
+// nominal specs.colors listesi yerine GERÇEKTEN teklifi olan renkleri
+// gösterir (ör. "Siyah 256 yok ama Beyaz 512 var" ise kartta sadece
+// Beyaz noktası görünür). Hiçbir teklifte renk bilgisi yoksa (çoğu ürün
+// için hâlâ böyle — offers.color='' = "varyant belirtilmemiş"), eskisi
+// gibi specs.colors'ın tamamına geri düşülür; aksi halde çoğu ürünün
+// kartında hiç nokta kalmazdı.
+// NOT: araştırılan teklif renk adları (ör. "Çöl Titanyum") specs.colors'
+// taki marketing ismiyle (ör. "Çöl Titanyumu") birebir string eşleşmesi
+// GARANTİ ETMEZ — o yüzden filtrelemek yerine, teklif renkleri varsa
+// doğrudan ONLARI kullanıyoruz (kesişim almıyoruz).
+function displayColorsFor(p){
+  const offerColors = [...new Set(p.offers.map(o => o.color).filter(Boolean))];
+  return offerColors.length ? offerColors : p.colors;
+}
+
+// Tekliflerini (kapasite, renk) kombinasyonuna göre gruplar — product-page.js
+// (ürün detay sayfası) ile AYNI mantık, burada da kart üzerinde GB/renk
+// seçilince fiyat/satıcı/stok bilgisinin doğru kombinasyona göre
+// değişebilmesi için. Birden fazla gerçek kombinasyon varsa (hasVariantPicker)
+// kart, statik renk noktaları yerine tıklanabilir bir seçici gösterir.
+function variantsFor(p){
+  const groups = new Map();
+  for (const o of p.offers) {
+    const key = o.storageGb + '::' + o.color;
+    if (!groups.has(key)) groups.set(key, { storageGb: o.storageGb, color: o.color, offers: [] });
+    groups.get(key).offers.push(o);
+  }
+  return [...groups.values()]
+    .map(v => ({ ...v, offers: v.offers.sort((a,b)=>a.price-b.price) }))
+    .sort((a,b)=>a.offers[0].price-b.offers[0].price);
+}
+
+// Bir teklif listesini ".offer-item" satırlarına çevirir — hem ilk kart
+// render'ında hem de bir varyant seçildiğinde teklif listesini yeniden
+// çizmek için kullanılıyor (tek bir yerden, DRY). showTag=true iken (birden
+// fazla varyantlı üründe) her satıra hangi kapasite/renge ait olduğunu
+// gösteren küçük bir etiket ekleniyor — karışmasın diye.
+function offerRowsHTML(offerList, showTag){
+  return offerList.map(o => {
+    const tag = showTag && (o.storageGb || o.color)
+      ? ` <span class="offer-variant-tag">${o.storageGb ? formatGb(o.storageGb) : ''}${o.storageGb && o.color ? ', ' : ''}${escHtml(o.color || '')}</span>`
+      : '';
+    return `
+      <div class="offer-item${o.inStock ? '' : ' offer-item-out'}">
+        <div class="offer-item-top">
+          <span>${escHtml(o.seller)}${tag}${o.inStock ? '' : ' <span class="stock-badge">Stokta yok</span>'}</span>
+          <span class="op">${fmt(o.price)}</span>
+        </div>
+        <div class="offer-cta">
+          <a href="${API_BASE}/satici-git/${encodeURIComponent(o.id)}" target="_blank" rel="nofollow sponsored noopener">Satıcıya Git</a>
+          <span class="ad-tag">Reklam</span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// Seçili kapasitede GERÇEK teklifi olan renkleri küçük tıklanabilir
+// noktalar olarak üretir (product-page.js'teki renderColorSwatches'ın
+// kart boyutuna uyarlanmış hâli).
+function cardColorSwatchesHTML(variants, storageGb, selectedColor){
+  const withColor = variants.filter(v => v.storageGb === storageGb && v.color);
+  if (!withColor.length) return '';
+  return withColor.map(v => `
+    <button type="button" class="card-color-dot card-color-dot-btn${v.color === selectedColor ? ' selected' : ''}"
+      data-color="${escHtml(v.color)}" style="background:${colorSwatchHex(v.color)}"
+      title="${escHtml(v.color)}" aria-label="${escHtml(v.color)}"></button>`).join('');
+}
+
+// Kart üzerindeki GB seçici + o kapasiteye ait renk noktaları. Birden
+// fazla gerçek varyant kombinasyonu olmayan (çoğunluk) ürünlerde hiç
+// çağrılmıyor — onlar eski statik colorDotsHTML görünümünü koruyor.
+function cardVariantPickerHTML(p, variants, defaultVariant){
+  const storageOptions = [...new Set(variants.map(v => v.storageGb))].sort((a,b)=>a-b);
+  return `<div class="card-variant-picker">
+    ${storageOptions.length > 1 ? `<div class="card-storage-pills" id="storage-pills-${p.id}">
+      ${storageOptions.map(gb => `<button type="button" class="card-variant-pill${gb === defaultVariant.storageGb ? ' selected' : ''}" data-storage="${gb}">${formatGb(gb)}</button>`).join('')}
+    </div>` : ''}
+    <div class="card-color-swatches" id="color-swatches-${p.id}">${cardColorSwatchesHTML(variants, defaultVariant.storageGb, defaultVariant.color)}</div>
+  </div>`;
+}
+
+// Kullanıcı karttaki GB/renk seçicisinden bir kombinasyon seçtiğinde,
+// fiyatı, satıcı sayısını, "Satıcılar" başlığını, taksit rozetini ve
+// teklif listesini SEÇİLEN kombinasyona göre yeniden çiziyor — sayfaya
+// zaten gömülü olan PHONES verisi üzerinden, yeni bir istek atmadan.
+function selectCardVariant(p, storageGb, color){
+  const variants = variantsFor(p);
+  const match = variants.find(v => v.storageGb === storageGb && v.color === color)
+    || variants.find(v => v.storageGb === storageGb)
+    || variants[0];
+  if (!match) return;
+  const activeOffers = match.offers;
+  const best = inStockFirst(activeOffers).sort((a,b)=>a.price-b.price)[0];
+  if (!best) return;
+
+  const priceEl = document.getElementById('price-'+p.id);
+  if (priceEl) priceEl.textContent = fmt(best.price);
+  const specStorageEl = document.getElementById('spec-storage-'+p.id);
+  if (specStorageEl) specStorageEl.textContent = formatGb(storageGb);
+  const sellerEl = document.getElementById('seller-line-'+p.id);
+  if (sellerEl) sellerEl.innerHTML = `${escHtml(best.seller)} üzerinden <span class="ad-tag">Reklam</span>`;
+  const countEl = document.getElementById('offers-count-'+p.id);
+  if (countEl) countEl.textContent = `Satıcılar (${activeOffers.length})`;
+  const offersListEl = document.getElementById('offers-'+p.id);
+  if (offersListEl) offersListEl.innerHTML = offerRowsHTML(activeOffers, true);
+  const lowestEl = document.getElementById('lowest-badge-'+p.id);
+  if (lowestEl) {
+    const isLowest = p.minPrice30d != null && best.price <= p.minPrice30d + 0.5;
+    lowestEl.style.display = isLowest ? '' : 'none';
+  }
+
+  const pillsEl = document.getElementById('storage-pills-'+p.id);
+  if (pillsEl) {
+    pillsEl.querySelectorAll('.card-variant-pill').forEach(btn => {
+      btn.classList.toggle('selected', Number(btn.dataset.storage) === storageGb);
+    });
+  }
+  const swatchesEl = document.getElementById('color-swatches-'+p.id);
+  if (swatchesEl) {
+    swatchesEl.innerHTML = cardColorSwatchesHTML(variants, storageGb, match.color);
+    swatchesEl.querySelectorAll('.card-color-dot-btn').forEach(btn => {
+      btn.addEventListener('click', () => selectCardVariant(p, storageGb, btn.dataset.color));
+    });
+  }
+}
+
+function cardHTML(p){
+  const displayColors = displayColorsFor(p);
+  const variants = variantsFor(p);
+  const hasVariantPicker = variants.length > 1;
+  const defaultVariant = hasVariantPicker ? variants[0] : null;
+  const sorted = [...p.offers].sort((a,b)=>a.price-b.price);
+  // Varyant seçicisi olan bir üründe başlangıç görünümü en ucuz gerçek
+  // kombinasyona göre; olmayan üründe eskisi gibi tüm tekliflere göre.
+  const activeOffers = hasVariantPicker ? defaultVariant.offers : sorted;
+  // "En uygun" olarak stokta olmayan bir teklifi göstermeyelim — varsa
+  // stoktakiler arasından en ucuzu, hiçbiri stokta değilse yine de en
+  // ucuzu (boş göstermek daha kötü olur)
+  const best = inStockFirst(activeOffers).sort((a,b)=>a.price-b.price)[0];
+  // Teklifler artık sadece Hepsiburada/Trendyol/Amazon TR'den geliyor —
+  // üçünde de teklifi olmayan bir ürün için `best` undefined olur.
+  // Fiyat/satıcı bilgisi göstermeye çalışmak yerine dürüstçe "Satış
+  // yok" diyoruz; karşılaştırma/favori butonları (cmp-/fav-) yine de
+  // JS tarafından koşulsuz aranıyor, o yüzden bu daraltılmış kartta da
+  // bulunmalılar.
+  if (!best) {
+    return `
+    <div class="card">
+      <button class="compare-toggle" id="cmp-${p.id}" title="Karşılaştırmaya ekle" aria-label="Karşılaştırmaya ekle veya çıkar">+</button>
+      <button class="favorite-toggle" id="fav-${p.id}" title="Favorilere ekle" aria-label="Favorilere ekle veya çıkar">${ICON_HEART}</button>
+      <a class="card-link" href="${API_BASE}/urun/${p.id}/${slugify(p.name)}">
+        <div class="card-thumb">${THUMB_SVG}</div>
+        <span class="brand-badge">${escHtml(p.brand)}</span>
+        <h3>${escHtml(displayModelName(p.name))}</h3>
+      </a>
+      <div class="spec-line">${p.ram}GB · ${p.storage}GB · ${p.screen}" · ${(p.battery/1000).toFixed(1)}k mAh</div>
+      ${p.nfc?'<span class="nfc-badge">NFC</span>':''}
+      ${colorDotsHTML(displayColors)}
+      <div class="price-block">
+        <p class="muted" style="margin-top:10px">Satış yok</p>
+      </div>
+    </div>`;
+  }
+  // fiyat geçmişindeki (son 30 gün) en düşük değere eşit ya da ondan
+  // ucuzsa, bunun gerçekten iyi bir zamanlama olduğunu rozetle belirt
+  const isLowestIn30d = p.minPrice30d != null && best.price <= p.minPrice30d + 0.5;
+  return `
+  <div class="card">
+    <button class="compare-toggle" id="cmp-${p.id}" title="Karşılaştırmaya ekle" aria-label="Karşılaştırmaya ekle veya çıkar">+</button>
+    <button class="favorite-toggle" id="fav-${p.id}" title="Favorilere ekle" aria-label="Favorilere ekle veya çıkar">${ICON_HEART}</button>
+    <a class="card-link" href="${API_BASE}/urun/${p.id}/${slugify(p.name)}">
+      <div class="card-thumb">${THUMB_SVG}</div>
+      <span class="brand-badge">${escHtml(p.brand)}</span>
+      <h3>${escHtml(displayModelName(p.name))}</h3>
+    </a>
+    <div class="spec-line">${p.ram}GB · <span id="spec-storage-${p.id}">${formatGb(hasVariantPicker ? defaultVariant.storageGb : p.storage)}</span> · ${p.screen}" · ${(p.battery/1000).toFixed(1)}k mAh</div>
+    ${p.nfc?'<span class="nfc-badge">NFC</span>':''}
+    ${hasVariantPicker ? cardVariantPickerHTML(p, variants, defaultVariant) : colorDotsHTML(displayColors)}
+    <div class="price-block">
+      <div class="price-row">
+        <span class="price" id="price-${p.id}">${fmt(best.price)}</span>
+        <span class="best-tag">En uygun</span>
+      </div>
+      <div class="lowest-badge" id="lowest-badge-${p.id}"${isLowestIn30d ? '' : ' style="display:none"'}>${ICON_LOWEST}<span>Son 30 günün en düşük fiyatı</span></div>
+      <div class="seller-line" id="seller-line-${p.id}">${escHtml(best.seller)} üzerinden <span class="ad-tag">Reklam</span></div>
+      <div class="card-actions">
+        <button class="card-action" id="toggle-${p.id}">${ICON_STORE}<span id="offers-count-${p.id}">Satıcılar (${activeOffers.length})</span></button>
+        <button class="card-action" id="history-toggle-${p.id}">${ICON_HISTORY}<span>Geçmiş</span></button>
+      </div>
+      <div class="offers-list" id="offers-${p.id}">
+        ${offerRowsHTML(activeOffers, hasVariantPicker)}
+      </div>
+      <div class="price-history" id="history-${p.id}"></div>
+    </div>
+  </div>`;
+}
+
+document.getElementById('brandFilter').addEventListener('click', e=>{
+  const btn = e.target.closest('button'); if(!btn) return;
+  document.querySelectorAll('#brandFilter button').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  currentBrand = btn.dataset.brand;
+  renderGrid();
+});
+document.getElementById('sortFilter').addEventListener('click', e=>{
+  const btn = e.target.closest('button'); if(!btn) return;
+  document.querySelectorAll('#sortFilter button').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  currentSort = btn.dataset.sort; renderGrid();
+});
+document.getElementById('favFilterBtn').addEventListener('click', ()=>{
+  showFavoritesOnly = !showFavoritesOnly;
+  const btn = document.getElementById('favFilterBtn');
+  btn.classList.toggle('active', showFavoritesOnly);
+  btn.setAttribute('aria-pressed', String(showFavoritesOnly));
+  renderGrid();
+});
+
+/* ================= AI ARAMA — artık gerçek backend'e soruyor ================= */
+async function runAISearch(q){
+  const aiPickBox = document.getElementById('aiPick');
+  try {
+    const res = await fetch(`${API_BASE}/api/ai-search`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ query: q }),
+    });
+    if(!res.ok) throw new Error('API hatası: ' + res.status);
+    const data = await res.json();
+
+    const cta = document.getElementById('aiPickCta');
+    if(!data.pick){
+      // Backend bazen (ör. "pixel yüz tanıma" gibi, o markada gerçekten
+      // hiç Face ID olmadığı için) gerçekten SIFIR sonuç döndürür —
+      // önceden kutu sessizce gizleniyordu, kullanıcı aramanın çalışıp
+      // çalışmadığını hiç anlayamıyordu. Şimdi dürüstçe "bulunamadı"
+      // mesajı gösteriliyor.
+      document.getElementById('aiPickName').textContent = 'Bu kriterlere uyan bir telefon bulunamadı';
+      document.getElementById('aiPickReasons').innerHTML = '<li>Farklı bir bütçe veya özellik kombinasyonu dene</li>';
+      cta.style.display = 'none';
+      aiPickBox.classList.add('show');
+      return;
+    }
+
+    document.getElementById('aiPickName').textContent = data.pick.canonical_name;
+    document.getElementById('aiPickReasons').innerHTML = data.reasons.map(r=>`<li>${escHtml(r)}</li>`).join('');
+    // İsimle arandığı için bulunan ama Hepsiburada/Trendyol/Amazon TR'de
+    // satışta olmayan bir model — gidilecek gerçek bir teklif yok,
+    // "#" href'li bir buton yanıltıcı olurdu.
+    cta.style.display = data.pick.best_offer_id ? '' : 'none';
+    if (data.pick.best_offer_id) cta.href = `${API_BASE}/satici-git/${encodeURIComponent(data.pick.best_offer_id)}`;
+    aiPickBox.classList.add('show');
+
+    // Backend'in döndürdüğü aday ürünleri, zaten yüklü olan tam
+    // veriyle (offers dahil) eşleştirip alt gridde o sırayla göster
+    const idOrder = data.candidates.map(c => c.id);
+    const ordered = idOrder.map(id => PHONES.find(p => p.id === id)).filter(Boolean);
+
+    currentBrand = 'all';
+    document.querySelectorAll('#brandFilter button').forEach(b=>b.classList.remove('active'));
+    document.querySelector('#brandFilter button[data-brand="all"]').classList.add('active');
+    renderGrid(ordered);
+    document.getElementById('catalog').scrollIntoView({behavior:'smooth', block:'start'});
+  } catch (err) {
+    console.error(err);
+    aiPickBox.classList.remove('show');
+    alert('AI arama şu an çalışmıyor. Backend sunucusu çalışıyor mu kontrol et.');
+  }
+}
+
+document.getElementById('aiBtn').addEventListener('click', ()=>{
+  const q = document.getElementById('aiInput').value.trim();
+  if(q) runAISearch(q);
+});
+document.getElementById('aiInput').addEventListener('keydown', e=>{
+  if(e.key==='Enter') document.getElementById('aiBtn').click();
+});
+document.querySelectorAll('#quickChips .chip').forEach(chip=>{
+  chip.addEventListener('click', ()=>{
+    document.getElementById('aiInput').value = chip.dataset.q;
+    runAISearch(chip.dataset.q);
+  });
+});
+
+/* ================= KARŞILAŞTIRMA ================= */
+function updateCompareBar(){
+  const bar = document.getElementById('compareBar');
+  document.getElementById('compareCount').textContent = compareSet.size;
+  bar.classList.toggle('hidden', compareSet.size < 2);
+}
+document.getElementById('compareClear').addEventListener('click', ()=>{
+  compareSet.clear(); renderGrid(); updateCompareBar();
+});
+document.getElementById('compareGo').addEventListener('click', ()=>{
+  // compareSet, seçim sırasını korur (Set insertion order) — modaldaki
+  // sütunlar da kullanıcının işaretleme sırasıyla eşleşsin diye PHONES'u
+  // filtrelemek yerine compareSet'i baz alıyoruz
+  const items = [...compareSet].map(id => PHONES.find(p=>p.id===id)).filter(Boolean);
+  const rows = [
+    ['Fiyat (en uygun)', items.map(p=>{ const m = minOffer(p); return m ? fmt(m.price) : 'Satış yok'; })],
+    ['Marka', items.map(p=>escHtml(p.brand))],
+    ['RAM', items.map(p=>p.ram+' GB')],
+    ['Depolama', items.map(p=>p.storage+' GB')],
+    ['Ekran', items.map(p=>p.screen+'"')],
+    ['Ekran Yenileme Hızı', items.map(p=>p.refreshRate ? p.refreshRate+'Hz' : '—')],
+    ['Batarya', items.map(p=>p.battery+' mAh')],
+    ['Kamera', items.map(p=>p.camera+' MP' + (p.ultraWide?` + ${p.ultraWide}MP geniş`:'') + (p.telephoto?` + ${p.telephoto}MP tele`:''))],
+    ['Ön Kamera', items.map(p=>p.frontCamera ? p.frontCamera+' MP' : '—')],
+    ['Ağırlık', items.map(p=>p.weight ? p.weight+' g' : '—')],
+    ['Su/Toz Direnci', items.map(p=>escHtml(p.ipRating) || '—')],
+    ['Kablolu Şarj', items.map(p=>p.wiredWatts ? p.wiredWatts+'W' : '—')],
+    ['Kablosuz Şarj', items.map(p=>p.wirelessWatts ? p.wirelessWatts+'W' : 'Yok')],
+    ['Çip', items.map(p=>escHtml(p.chip))],
+    ['NFC', items.map(p=>p.nfc?'Var':'Yok')],
+    ['Katlanabilir', items.map(p=>p.isFoldable ? (escHtml(p.foldStyle)||'Evet') : 'Hayır')],
+    ['Kalem (Stylus)', items.map(p=>p.stylusSupport?'Var':'Yok')],
+    ['Kilit Açma', items.map(p=>escHtml(p.biometricUnlock) || '—')],
+    ['SIM Desteği', items.map(p=>escHtml(p.simType) || '—')],
+    ['Kızılötesi Kumanda', items.map(p=>p.irBlaster?'Var':'Yok')],
+    ['8K Video', items.map(p=>p.video8k?'Var':'Yok')],
+    ['Uydu Bağlantısı', items.map(p=>p.satellite?'Var':'Yok')],
+    ['Ekran Parlaklığı', items.map(p=>p.screenNits ? p.screenNits+' nit' : '—')],
+    ['Gövde Malzemesi', items.map(p=>escHtml(p.buildMaterial) || '—')],
+    ['Stereo Hoparlör', items.map(p=>p.stereoSpeakers?'Var':'Yok')],
+    ['Kulaklık Girişi (3.5mm)', items.map(p=>p.headphoneJack?'Var':'Yok')],
+    ['Hafıza Kartı (microSD)', items.map(p=>p.expandableStorage?'Var':'Yok')],
+    ['Fiziksel Kamera Düğmesi', items.map(p=>p.cameraButton?'Var':'Yok')],
+    ['Renk Seçenekleri', items.map(p=>p.colors && p.colors.length ? escHtml(p.colors.join(', ')) : '—')],
+  ];
+  const head = `<tr><th>Özellik</th>${items.map(p=>`<th>${escHtml(p.name)}</th>`).join('')}</tr>`;
+  const body = rows.map(r=>`<tr><td>${r[0]}</td>${r[1].map(v=>`<td class="pval">${v}</td>`).join('')}</tr>`).join('');
+  document.getElementById('modalBody').innerHTML = `<table class="compare-table">${head}${body}</table>`;
+  document.getElementById('modalOverlay').classList.remove('hidden');
+});
+document.getElementById('modalClose').addEventListener('click', ()=>{
+  document.getElementById('modalOverlay').classList.add('hidden');
+});
+document.getElementById('modalOverlay').addEventListener('click', e=>{
+  if(e.target.id==='modalOverlay') e.currentTarget.classList.add('hidden');
+});
+
+loadProducts();
+
+// Birinci taraf, kimliksiz sayfa görüntüleme sayacı — kimlik/IP
+// saklamaz, sadece hangi sayfa ne zaman görüntülendi bilgisini tutar.
+// Başarısız olursa (backend kapalıysa vb.) sessizce yok sayılır,
+// kullanıcı deneyimini hiçbir şekilde etkilemez.
+fetch(`${API_BASE}/api/track`, {
+  method: 'POST',
+  headers: {'Content-Type':'application/json'},
+  body: JSON.stringify({ path: location.pathname }),
+}).catch(()=>{});
+
+/* ================= MOBİL MENÜ ================= */
+(function(){
+  const burger = document.getElementById('navBurger');
+  const mobileNav = document.getElementById('navMobile');
+  function closeMenu(){
+    mobileNav.classList.remove('open');
+    burger.classList.remove('open');
+    burger.setAttribute('aria-expanded', 'false');
+  }
+  burger.addEventListener('click', ()=>{
+    const isOpen = mobileNav.classList.toggle('open');
+    burger.classList.toggle('open', isOpen);
+    burger.setAttribute('aria-expanded', String(isOpen));
+  });
+  mobileNav.querySelectorAll('a').forEach(a => a.addEventListener('click', closeMenu));
+})();
+
+/* ================= ÇEREZ ONAYI ================= */
+(function(){
+  const banner = document.getElementById('cookieBanner');
+
+  // Karşılaştırma çubuğu da ekranın altına sabitlendiği için, çerez
+  // banner'ı açıkken ikisi üst üste biniyordu — banner'ın gerçek
+  // yüksekliği kadar karşılaştırma çubuğunu yukarı it.
+  function syncCompareBarOffset(){
+    const visible = !banner.classList.contains('hidden');
+    const offset = visible ? Math.ceil(banner.getBoundingClientRect().height) + 12 : 0;
+    document.documentElement.style.setProperty('--cookie-offset', offset + 'px');
+  }
+
+  if(!localStorage.getItem('makulbul_cookie_ok')){
+    banner.classList.remove('hidden');
+  }
+  syncCompareBarOffset();
+  window.addEventListener('resize', syncCompareBarOffset);
+
+  document.getElementById('cookieAccept').addEventListener('click', ()=>{
+    localStorage.setItem('makulbul_cookie_ok', '1');
+    banner.classList.add('hidden');
+    syncCompareBarOffset();
+  });
+})();
+</script>
+</body>
+</html>

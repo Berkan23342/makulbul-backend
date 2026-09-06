@@ -1145,6 +1145,18 @@ app.get('/og-image.png', (req, res) => {
   res.sendFile(path.join(__dirname, 'og-image.png'));
 });
 
+// ---------------------------------------------------------------------
+// Statik frontend (public/) — kart ızgarası, AI arama, gizlilik/
+// kullanım şartları sayfaları. Önceden bu dosyalar AYRI bir statik
+// sunucuda (cepfiyat-frontend, farklı bir port/domain) barınıyordu;
+// tek bir Hostinger Node uygulaması olarak deploy edildiği için backend
+// artık bunları da AYNI origin'den sunuyor (public/index.html'deki
+// API_BASE='' bu yüzden — göreceli /api/... çağrıları otomatik olarak
+// buraya gelir). Yukarıdaki /api/*, /urun/*, /sitemap.xml, /robots.txt,
+// /og-image.png rotalarıyla ÇAKIŞMAZ — bunlardan sonra kayıtlı olduğu
+// için sadece EŞLEŞMEYEN yollarda devreye girer.
+app.use(express.static(path.join(__dirname, 'public')));
+
 // Tanımsız route'lar için düz JSON 404 (Express'in varsayılan HTML
 // sayfası yerine).
 app.use((req, res) => {
