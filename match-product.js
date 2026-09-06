@@ -30,6 +30,37 @@ function isSafeHttpUrl(value) {
   }
 }
 
+// sellers.website_domain daha önce hiç kontrol edilmiyordu — bir
+// scraper (ya da /api/ingest-offer'a doğrudan istek atan biri)
+// sellerId="Hepsiburada" derken productUrl/affiliateUrl'e TAMAMEN
+// alakasız (ör. bir oltalama sayfası) bir link verebiliyordu; isSafeHttpUrl
+// sadece "http(s) mi" diye bakıyor, "gerçekten o satıcıya mı ait" diye
+// bakmıyordu. Bu, affiliate ortaklığı kuracağımız şirketlerin en çok
+// önemseyeceği şey: bizim sitemizde "Hepsiburada" yazan bir linkin
+// GERÇEKTEN hepsiburada.com'a gittiğinin garantisi. Alt alan adlarına
+// izin veriyoruz (ör. "www.hepsiburada.com", "m.hepsiburada.com") ama
+// "hepsiburada.com.evil.com" gibi bir sahte alt alan adı taklidini
+// (sondan eşleşme + nokta sınırı olmadan sadece .includes() kullansaydık
+// bu açığa düşerdik) YAKALAR.
+function hostnameMatchesDomain(hostname, domain) {
+  const h = String(hostname || '').toLowerCase();
+  const d = String(domain || '').toLowerCase();
+  if (!h || !d) return false;
+  return h === d || h.endsWith('.' + d);
+}
+
+function urlMatchesSellerDomain(value, websiteDomain) {
+  // website_domain boşsa (henüz doldurulmamış eski bir satıcı satırı)
+  // eski davranışı bozmamak için kontrolü atlıyoruz — ama bu durumu
+  // ayrıca loglayıp fark edilmesini sağlıyoruz (bkz. çağıran taraf).
+  if (!websiteDomain) return true;
+  try {
+    return hostnameMatchesDomain(new URL(value).hostname, websiteDomain);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * @param {import('pg').Pool} pool
  * @param {object} input
@@ -49,7 +80,27 @@ async function matchProduct(pool, input) {
   } = input;
 
   if (!isSafeHttpUrl(productUrl) || (affiliateUrl !== undefined && affiliateUrl !== null && !isSafeHttpUrl(affiliateUrl))) {
-    throw new Error('productUrl/affiliateUrl geçerli bir http(s) adresi olmalı');
+    const err = new Error('productUrl/affiliateUrl geçerli bir http(s) adresi olmalı');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  // Satıcının GERÇEK alan adını (sellers.website_domain) çekip
+  // productUrl/affiliateUrl'in gerçekten o alan adına ait olduğunu
+  // doğruluyoruz — "Hepsiburada" seçilip alakasız/kötü niyetli bir
+  // linkin eklenmesini engelliyor (bkz. urlMatchesSellerDomain() üstteki
+  // yorum). website_domain henüz girilmemiş bir satıcı için (NULL/boş)
+  // kontrol atlanır ama bu durum konsola loglanır ki fark edilsin.
+  const { rows: sellerDomainRows } = await pool.query(
+    `SELECT website_domain FROM sellers WHERE id = $1`, [sellerId]
+  );
+  const websiteDomain = sellerDomainRows[0]?.website_domain || null;
+  if (!websiteDomain) {
+    console.warn(`⚠ sellers.website_domain boş (sellerId=${sellerId}) — alan adı doğrulaması atlandı`);
+  } else if (!urlMatchesSellerDomain(productUrl, websiteDomain) || (affiliateUrl && !urlMatchesSellerDomain(affiliateUrl, websiteDomain))) {
+    const err = new Error(`productUrl/affiliateUrl, satıcının kendi alan adıyla (${websiteDomain}) uyuşmuyor`);
+    err.statusCode = 400;
+    throw err;
   }
 
   // --- ADIM 1: GTIN ile kesin eşleşme ---

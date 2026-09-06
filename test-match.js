@@ -39,18 +39,22 @@ async function main() {
 
     for (const test of TEST_CASES) {
       const { rows: sellerRows } = await client.query(
-        'SELECT id FROM sellers WHERE name = $1', [test.sellerName]
+        'SELECT id, website_domain FROM sellers WHERE name = $1', [test.sellerName]
       );
       if (sellerRows.length === 0) {
         console.log(`✘ Satıcı bulunamadı: ${test.sellerName} (sellers-seed atlandı mı?)\n`);
         continue;
       }
 
+      // matchProduct artık productUrl'in GERÇEKTEN satıcının kendi
+      // alan adına ait olmasını istiyor (bkz. match-product.js'teki
+      // urlMatchesSellerDomain) — düz "example.com" artık reddedilir,
+      // o yüzden test URL'i her satıcının kendi domain'i altında kuruluyor.
       const result = await matchProduct(client, {
         rawTitle: test.rawTitle,
         sellerId: sellerRows[0].id,
         price: test.price,
-        productUrl: 'https://example.com/makulbul-test-match-script',
+        productUrl: `https://${sellerRows[0].website_domain}/makulbul-test-match-script`,
       });
 
       console.log(`Ham başlık : "${test.rawTitle}"`);

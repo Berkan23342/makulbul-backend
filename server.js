@@ -975,7 +975,19 @@ function isSafeHttpUrl(value) {
 // nokta. Otomatik eşleştirme motorunu (match-product.js) çalıştırır.
 // Body: { sellerName, rawTitle, price, currency?, productUrl, affiliateUrl?, gtin?, mpn? }
 // ---------------------------------------------------------------------
+// Bu uç nokta veri YAZIYOR — gösterilen fiyatları/"Satıcıya Git"
+// linklerini doğrudan etkiliyor. Önceden ingestLimiter dışında hiçbir
+// erişim kontrolü yoktu: rate limit'e takılmadığı sürece kimliği
+// belirsiz herhangi biri, var olan bir satıcı adını (ör. "Hepsiburada")
+// seçip sahte bir fiyat/link "besleyebiliyordu" — bu hem kullanıcıyı
+// hem de o satıcı markasını riske atardı (bkz. match-product.js'teki
+// website_domain kontrolü, bunun tamamlayıcısı). .env'de INGEST_API_KEY
+// tanımlıysa X-Ingest-Key başlığı eşleşmeyen istekler reddedilir;
+// tanımlı değilse (yerel geliştirme) eskisi gibi açık kalır.
 app.post('/api/ingest-offer', ingestLimiter, async (req, res) => {
+  if (process.env.INGEST_API_KEY && req.get('X-Ingest-Key') !== process.env.INGEST_API_KEY) {
+    return res.status(401).json({ error: 'Yetkisiz' });
+  }
   try {
     const { sellerName, rawTitle, price, currency, productUrl, affiliateUrl, gtin, mpn } = req.body;
     if (!sellerName || !rawTitle || !price || !productUrl) {
@@ -1005,6 +1017,13 @@ app.post('/api/ingest-offer', ingestLimiter, async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error(err);
+    // match-product.js girdi doğrulama hatalarını (geçersiz URL, satıcı
+    // alan adıyla uyuşmayan link) err.statusCode=400 ile işaretliyor —
+    // bunları istemciye "sunucu hatası" (500) değil, gerçek nedenleriyle
+    // (400) döndürüyoruz; başka her şey hâlâ genel bir mesajla 500 kalır.
+    if (err.statusCode === 400) {
+      return res.status(400).json({ error: err.message });
+    }
     res.status(500).json({ error: 'Eşleştirme yapılamadı' });
   }
 });
