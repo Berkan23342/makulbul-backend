@@ -324,22 +324,28 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
   const initialOfferList = hasVariantPicker ? defaultVariant.offers : offers;
   const offerRows = initialOfferList.map(offerRowHTML).join('');
 
-  const jsonLd = {
+  // Google, "Product" yapılandırılmış verisi için "offers", "review" veya
+  // "aggregateRating" alanlarından en az birini ZORUNLU tutuyor (Search
+  // Console: "Ürün snippet'leri" > "'offers', 'review' veya
+  // 'aggregateRating' belirtilmelidir"). Elimizde review/rating verisi
+  // yok; teklifi (satıcısı) olmayan bir ürün için de verecek bir fiyat
+  // yok. Bu yüzden SADECE en az bir teklif varsa Product JSON-LD
+  // yayınlıyoruz — teklifsiz ürünlerde hiç yapılandırılmış veri çıkmıyor
+  // (bu sayfaların Google Alışveriş'e sunacağı bir şey zaten yok).
+  const jsonLd = best ? {
     '@context': 'https://schema.org/',
     '@type': 'Product',
     name: product.canonical_name,
     brand: { '@type': 'Brand', name: product.brand },
-    ...(best ? {
-      offers: {
-        '@type': 'AggregateOffer',
-        priceCurrency: 'TRY',
-        lowPrice: Number(best.price),
-        highPrice: Number(offers[offers.length - 1].price),
-        offerCount: offers.length,
-        availability: 'https://schema.org/InStock',
-      },
-    } : {}),
-  };
+    offers: {
+      '@type': 'AggregateOffer',
+      priceCurrency: 'TRY',
+      lowPrice: Number(best.price),
+      highPrice: Number(offers[offers.length - 1].price),
+      offerCount: offers.length,
+      availability: 'https://schema.org/InStock',
+    },
+  } : null;
 
   return `<!doctype html>
 <html lang="tr">
@@ -372,7 +378,7 @@ ${best ? `<meta property="product:price:amount" content="${Number(best.price)}">
 ${FAVICON_LINK}
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
-<script type="application/ld+json">${JSON.stringify(jsonLd).replace(/</g, '\\u003c')}</script>
+${jsonLd ? `<script type="application/ld+json">${JSON.stringify(jsonLd).replace(/</g, '\\u003c')}</script>` : ''}
 <style>${PAGE_STYLE}</style>
 </head>
 <body>
