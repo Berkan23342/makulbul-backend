@@ -204,8 +204,12 @@ const THUMB_SVG = `<svg viewBox="0 0 64 64" aria-hidden="true">
   <circle class="thumb-detail" cx="32" cy="50.5" r="1.7"/>
 </svg>`;
 
-// index.html ile aynı favicon — /urun/:id sayfalarında hiç yoktu
-const FAVICON_LINK = `<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22><rect width=%2232%22 height=%2232%22 rx=%228%22 fill=%22%230a0a0e%22/><circle cx=%2216%22 cy=%2216%22 r=%227%22 fill=%22%23c8ff4d%22/></svg>">`;
+// index.html ile aynı favicon — /urun/:id sayfalarında hiç yoktu.
+// Google, arama sonuçlarındaki site simgesi için data: URI değil gerçek
+// bir dosya URL'si istiyor (bkz. public/favicon.svg, public/favicon.ico).
+const FAVICON_LINK = `<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">`;
 
 function renderNav(frontendUrl) {
   return `<header class="nav"><div class="wrap">
