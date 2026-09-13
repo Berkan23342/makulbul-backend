@@ -1120,7 +1120,10 @@ app.get('/sitemap.xml', async (req, res) => {
     // Anasayfa (statik frontend'de barınıyor) ÖNCELİKLE listelenmeli —
     // önceden sadece ürün sayfaları vardı, arama motorları asıl giriş
     // noktasını (ana sayfa) bu dosyadan hiç göremiyordu.
-    const homeUrl = `  <url><loc>${FRONTEND_URL}/index.html</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`;
+    // NOT: canonical etiketiyle (FRONTEND_URL + "/") birebir eşleşmeli —
+    // "/index.html" farklı bir URL sayılıp yinelenen içerik/standart URL
+    // karışıklığına yol açabiliyordu.
+    const homeUrl = `  <url><loc>${FRONTEND_URL}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`;
     const urls = rows.map(p =>
       `  <url><loc>${BACKEND_URL}/urun/${p.id}/${slugify(p.canonical_name)}</loc><changefreq>daily</changefreq><priority>0.8</priority></url>`
     ).join('\n');
