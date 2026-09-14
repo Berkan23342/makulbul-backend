@@ -247,18 +247,24 @@ app.get('/api/products/:id/price-history', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------
-// POST /api/track — birinci taraf, kimliksiz sayfa görüntüleme sayacı.
+// POST /api/visit — birinci taraf, kimliksiz sayfa görüntüleme sayacı.
 // Çerez banner'ı "kullanım istatistiği için çerez kullanır" diyordu
 // ama arkasında hiçbir şey yoktu. Bu, dış bir analitik hesabı (GA4 vb.)
 // gerektirmeden, IP veya başka bir kimlik saklamadan (sadece hangi
 // sayfa, ne zaman) temel kullanım verisi tutar.
+// NOT: bu rota eskiden "/api/track" idi — sayfa yüklenir yüklenmez,
+// gecikmesiz atılan ve adında "track" geçen bu istek canlıda HER
+// SEFERİNDE 503 ile engelleniyordu (muhtemelen reklam/gizlilik
+// engelleyiciler ve/veya Hostinger kenar katmanı bunu bot/izleyici
+// deseni sayıyordu — client tarafında da window.load + gecikme +
+// sendBeacon'a geçildi, bkz. public/index.html ve product-page.js).
 // Body: { path }
 // ---------------------------------------------------------------------
-const trackLimiter = createRateLimiter({
+const visitLimiter = createRateLimiter({
   windowMs: 60 * 1000, max: 60, keyFn: req => req.ip,
 });
 
-app.post('/api/track', trackLimiter, async (req, res) => {
+app.post('/api/visit', visitLimiter, async (req, res) => {
   try {
     const path = String(req.body?.path || '').slice(0, 300);
     if (!path) return res.status(400).json({ error: 'path zorunludur' });

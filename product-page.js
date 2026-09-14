@@ -424,12 +424,22 @@ ${renderNav(frontendUrl)}
 (function(){
   var API_BASE = ${JSON.stringify(backendUrl)};
 
-  // Birinci taraf, kimliksiz sayfa görüntüleme sayacı
-  fetch(API_BASE + '/api/track', {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ path: location.pathname }),
-  }).catch(function(){});
+  // Birinci taraf, kimliksiz sayfa görüntüleme sayacı — index.html'deki
+  // aynı notla aynı sebepten (bkz. orada): sayfa yüklenir yüklenmez,
+  // gecikmesiz ve adında "track" geçen bir istek canlıda 503 ile
+  // engelleniyordu. window.load + kısa gecikme + sendBeacon bunu çözüyor.
+  window.addEventListener('load', function(){
+    setTimeout(function(){
+      var payload = JSON.stringify({ path: location.pathname });
+      try {
+        if (navigator.sendBeacon) {
+          navigator.sendBeacon(API_BASE + '/api/visit', new Blob([payload], { type: 'application/json' }));
+        } else {
+          fetch(API_BASE + '/api/visit', { method: 'POST', headers: {'Content-Type':'application/json'}, body: payload, keepalive: true }).catch(function(){});
+        }
+      } catch (e) {}
+    }, 800);
+  });
 
   // Renk seçici: sadece görsel bir tercih (fiyat/teklif renge göre
   // değişmiyor, kataloğumuzda böyle bir ayrım yok) — hangi swatch'a

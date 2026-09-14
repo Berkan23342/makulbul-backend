@@ -1247,13 +1247,26 @@ loadProducts();
 
 // Birinci taraf, kimliksiz sayfa görüntüleme sayacı — kimlik/IP
 // saklamaz, sadece hangi sayfa ne zaman görüntülendi bilgisini tutar.
-// Başarısız olursa (backend kapalıysa vb.) sessizce yok sayılır,
-// kullanıcı deneyimini hiçbir şekilde etkilemez.
-fetch(`${API_BASE}/api/track`, {
-  method: 'POST',
-  headers: {'Content-Type':'application/json'},
-  body: JSON.stringify({ path: location.pathname }),
-}).catch(()=>{});
+// NOT: eski hâli (sayfa yüklenir yüklenmez, hiç gecikmesiz, "/api/track"
+// adıyla) canlıda HER SEFERİNDE 503 ile engelleniyordu — muhtemelen
+// reklam/gizlilik engelleyicilerin (ve/veya Hostinger kenar katmanının)
+// "sayfa açılır açılmaz atılan, adında 'track' geçen istek" desenini bot/
+// izleyici sinyali sayması. window.load'dan sonra kısa bir gecikmeyle ve
+// tam bu amaç için var olan sendBeacon ile göndermek bu deseni kırıyor.
+// Yine de başarısız olursa sessizce yok sayılır, kullanıcı deneyimini
+// hiçbir şekilde etkilemez.
+window.addEventListener('load', () => {
+  setTimeout(() => {
+    const payload = JSON.stringify({ path: location.pathname });
+    try {
+      if (navigator.sendBeacon) {
+        navigator.sendBeacon(`${API_BASE}/api/visit`, new Blob([payload], { type: 'application/json' }));
+      } else {
+        fetch(`${API_BASE}/api/visit`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: payload, keepalive: true }).catch(()=>{});
+      }
+    } catch {}
+  }, 800);
+});
 
 /* ================= MOBİL MENÜ ================= */
 (function(){
