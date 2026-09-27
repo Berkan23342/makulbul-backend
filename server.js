@@ -39,12 +39,23 @@ const app = express();
 // aşağıdaki IP bazlı rate limit'ler işe yaramaz.
 app.set('trust proxy', 1);
 
-// Canlıda (NODE_ENV=production) http ile gelen isteği https'e yönlendir.
-// Yerelde (http, proxy yok) bu adım atlanır.
+// Canlıda (NODE_ENV=production) http ve/veya www'lı isteği tek seferde
+// https + www'sız standart adrese yönlendirir. Yerelde (http, proxy yok)
+// bu adım atlanır.
+// NOT: www'lı host (www.makulbul.com) önceden HTTPS'te de doğrudan 200
+// ile aynı içeriği sunuyordu — sayfadaki canonical etiketi www'sız adresi
+// gösterdiği için Google onu ayrı indexlemiyordu (bkz. Search Console'daki
+// "Doğru standart etikete sahip alternatif sayfa" raporu), ama Google'ın
+// crawl bütçesini gereksiz yere ikiye bölüyordu. Artık www'lı host'un
+// kendisi de tek bir 301 ile www'sız + https adrese yönlendiriliyor.
 if (IS_PROD) {
   app.use((req, res, next) => {
-    if (req.secure || req.get('x-forwarded-proto') === 'https') return next();
-    res.redirect(301, `https://${req.get('host')}${req.originalUrl}`);
+    const host = req.get('host') || '';
+    const isHttps = req.secure || req.get('x-forwarded-proto') === 'https';
+    const isWww = host.startsWith('www.');
+    if (isHttps && !isWww) return next();
+    const targetHost = isWww ? host.slice(4) : host;
+    res.redirect(301, `https://${targetHost}${req.originalUrl}`);
   });
 }
 
