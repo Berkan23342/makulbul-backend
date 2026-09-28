@@ -27,10 +27,11 @@ const { rankLaptopsByPower } = require('./ai-rank-laptop');
 const { scoreCpu, scoreGpu, computeLaptopPowerScore } = require('./chip-tiers-laptop');
 const {
   parseFieldThreshold, applyNumericThresholds, formatNumericReason,
-  PHONE_NUMERIC_FIELDS, LAPTOP_NUMERIC_FIELDS,
+  PHONE_NUMERIC_FIELDS, LAPTOP_NUMERIC_FIELDS, NUMERIC_FIELD_LABELS,
 } = require('./numeric-field-filters');
 const { parsePriceFilter } = require('./price-filter');
 const { foldTurkish } = require('./text-normalize');
+const { parseQueryWithAI } = require('./ai-query-fallback');
 const { renderProductPage, renderNotFoundPage, slugify } = require('./product-page');
 const { createRateLimiter } = require('./rate-limit');
 
@@ -517,6 +518,36 @@ async function handleLaptopAiSearch(req, res) {
     // çalıştıran hiçbir laptop kataloğumuzda yok).
     if (filters.macos && !filters.brand) filters.brand = 'Apple';
 
+    // AI SORGU YEDEK YOLU (bkz. ai-query-fallback.js'in başındaki tam
+    // açıklama) — SADECE yukarıdaki kural tabanlı ayrıştırma HİÇBİR
+    // kriter bulamadıysa (numericThresholds boş, fiyat/marka/yumuşak
+    // tercih yok) devreye giriyor. Regex bir şey bulduysa (kısmi de olsa)
+    // buraya HİÇ girilmiyor — maliyet/gecikme sadece "gerçekten
+    // anlaşılamayan" azınlık sorgularda oluşuyor. ANTHROPIC_API_KEY
+    // tanımlı değilse parseQueryWithAI sessizce null döner, davranış
+    // AYNEN eskisi gibi kalır (bkz. ai-rank.js'teki AYNI desen).
+    const hasRealCriteria = Object.keys(numericThresholds).length > 0 ||
+      Object.entries(filters).some(([k, v]) => (['maxPrice', 'minPrice', 'brand'].includes(k) ? v != null : v === true));
+    let usedAIQueryFallback = false;
+    if (!hasRealCriteria) {
+      const softFilterKeys = Object.keys(filters).filter(k => !['maxPrice', 'minPrice', 'brand'].includes(k));
+      const aiResult = await parseQueryWithAI(q, {
+        category: 'laptop',
+        numericFields: LAPTOP_NUMERIC_FIELDS,
+        labels: NUMERIC_FIELD_LABELS,
+        softFilterKeys,
+        brandNames: BRAND_KEYWORDS.map(b => b.brand),
+      });
+      if (aiResult) {
+        usedAIQueryFallback = true;
+        Object.assign(numericThresholds, aiResult.numericThresholds);
+        if (aiResult.maxPrice != null) filters.maxPrice = aiResult.maxPrice;
+        if (aiResult.minPrice != null) filters.minPrice = aiResult.minPrice;
+        if (aiResult.brand) filters.brand = aiResult.brand;
+        for (const key of aiResult.softFilters) filters[key] = true;
+      }
+    }
+
     const conditions = [`c.slug = 'laptop'`];
     const params = [];
     if (filters.brand) { params.push(filters.brand); conditions.push(`b.name = $${params.length}`); }
@@ -749,6 +780,11 @@ async function handleLaptopAiSearch(req, res) {
     const reasons = [];
     if (pick) {
       const bestPriceNum = Number(pick.best_price);
+      // Kural tabanlı ayrıştırma bu sorguda hiçbir şey bulamadığı için
+      // devreye giren AI yedek yolu kullanıldıysa dürüstçe belirt —
+      // aşağıdaki diğer tüm reasons satırları normal şekilde (artık AI'ın
+      // doldurduğu numericThresholds/filters üzerinden) eklenmeye devam ediyor.
+      if (usedAIQueryFallback) reasons.push('Yapay zeka destekli sorgu analizi kullanıldı');
       if (exactMatch) reasons.push('Aradığın model bulundu');
       if (filters.maxPrice && filters.minPrice) {
         const rangeLabel = `${filters.minPrice.toLocaleString('tr-TR')}-${filters.maxPrice.toLocaleString('tr-TR')} TL`;
@@ -1117,6 +1153,30 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
     if (q.includes('poco')) subBrandPrefix = 'POCO';
     else if (q.includes('redmi')) subBrandPrefix = 'Redmi';
 
+    // AI SORGU YEDEK YOLU — bkz. laptop handler'ındaki (handleLaptopAiSearch)
+    // AYNI mekanizmanın ve ai-query-fallback.js'in tam açıklaması.
+    const hasRealCriteria = Object.keys(numericThresholds).length > 0 || subBrandPrefix != null ||
+      Object.entries(filters).some(([k, v]) => (['maxPrice', 'minPrice', 'brand'].includes(k) ? v != null : v === true));
+    let usedAIQueryFallback = false;
+    if (!hasRealCriteria) {
+      const softFilterKeys = Object.keys(filters).filter(k => !['maxPrice', 'minPrice', 'brand'].includes(k));
+      const aiResult = await parseQueryWithAI(q, {
+        category: 'telefon',
+        numericFields: PHONE_NUMERIC_FIELDS,
+        labels: NUMERIC_FIELD_LABELS,
+        softFilterKeys,
+        brandNames: BRAND_KEYWORDS.map(b => b.brand),
+      });
+      if (aiResult) {
+        usedAIQueryFallback = true;
+        Object.assign(numericThresholds, aiResult.numericThresholds);
+        if (aiResult.maxPrice != null) filters.maxPrice = aiResult.maxPrice;
+        if (aiResult.minPrice != null) filters.minPrice = aiResult.minPrice;
+        if (aiResult.brand) filters.brand = aiResult.brand;
+        for (const key of aiResult.softFilters) filters[key] = true;
+      }
+    }
+
     const conditions = [`c.slug = 'telefon'`];
     const params = [];
     if (filters.brand) { params.push(filters.brand); conditions.push(`b.name = $${params.length}`); }
@@ -1478,6 +1538,9 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
       // biçim: "17.949 TL"). Number()'a çevirmeden .toLocaleString()
       // çağırmak SESSİZCE yanlış (biçimsiz) sonuç veriyordu, hata fırlatmıyordu.
       const bestPriceNum = Number(pick.best_price);
+      // Kural tabanlı ayrıştırma bu sorguda hiçbir şey bulamadığı için
+      // devreye giren AI yedek yolu kullanıldıysa dürüstçe belirt.
+      if (usedAIQueryFallback) reasons.push('Yapay zeka destekli sorgu analizi kullanıldı');
       if (exactMatch) reasons.push('Aradığın model bulundu');
       if (filters.maxPrice && filters.minPrice) {
         const rangeLabel = `${filters.minPrice.toLocaleString('tr-TR')}-${filters.maxPrice.toLocaleString('tr-TR')} TL`;
