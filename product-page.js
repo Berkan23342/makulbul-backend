@@ -48,13 +48,36 @@ function formatGb(gb) {
 
 function displayModelName(canonicalName) {
   return String(canonicalName || '')
-    .replace(/\s*\b\d+\s?(GB|TB)\b/i, '')
+    // "g" bayrağı olmadan sadece İLK eşleşme temizleniyordu — telefon
+    // adlarında ("iPhone 13 128GB") tek bir GB/TB token'ı olduğu için
+    // bu hiç fark etmiyordu, ama laptop adları HER ZAMAN "16GB/512GB"
+    // gibi İKİ token içeriyor (RAM+depolama) — "g" olmadan sadece ilki
+    // ("16GB") siliniyor, "/512GB" başlıkta çirkin bir kalıntı olarak
+    // kalıyordu.
+    .replace(/\s*\b\d+\s?(GB|TB)\b/gi, '')
+    // Laptop adlarındaki "16GB/512GB" kalıbında "/" SADECE bu iki
+    // token'ı ayırmak için var — ikisi de yukarıda silinince geriye
+    // anlamsız, tek başına kalan bir "/" kalıyordu (ör. "AL15-71P/").
+    .replace(/\//g, ' ')
     .replace(/\s{2,}/g, ' ')
     .trim();
 }
 
 function fmtTL(n) {
   return Number(n).toLocaleString('tr-TR') + ' TL';
+}
+
+// KRİTİK: public/index.html'deki (client-side kart/varyant render'ı)
+// AYNI kural — stokta olan teklifleri önceliklendir, hiçbiri stokta
+// değilse yine de bir şey göstermek (dürüstçe "stokta yok" etiketiyle)
+// boş bırakmaktan iyi olduğu için tüm tekliflere geri düş. Bu sayfa
+// (SSR /urun/:id, SEO için sonradan eklendi) bu deseni HİÇ uygulamıyordu
+// — en ucuz teklif tesadüfen stokta değilse bile "en uygun fiyat" diye
+// üstte gösteriliyor, Satıcıya Git linki de o tükenmiş teklife gidiyor,
+// hatta Google'a gönderilen JSON-LD "InStock" diye sabit yazıyordu.
+function inStockFirst(offers) {
+  const inStock = offers.filter(o => o.in_stock !== false);
+  return inStock.length ? inStock : offers;
 }
 
 // Renk isimlerinden (ör. "Kozmik Turuncu", "Buzul Mavisi") yaklaşık bir
@@ -112,6 +135,31 @@ const SPEC_LABELS = [
   ['has_headphone_jack', 'Kulaklık Girişi (3.5mm)', v => (v ? 'Var' : 'Yok')],
   ['has_expandable_storage', 'Hafıza Kartı Desteği (microSD)', v => (v ? 'Var' : 'Yok')],
   ['has_camera_button', 'Fiziksel Kamera Düğmesi', v => (v ? 'Var' : 'Yok')],
+  ['release_year', 'Çıkış Yılı', v => v],
+];
+
+// Laptop kategorisinin attribute_schema'sı (bkz. add-laptop-category.js)
+// telefonlarla neredeyse hiç örtüşmüyor (CPU/GPU/OS var, kamera/pil mAh/
+// NFC yok) — bu yüzden ayrı bir tablo, category alanına göre seçiliyor
+// (bkz. renderProductPage).
+const LAPTOP_SPEC_LABELS = [
+  ['cpu', 'İşlemci', v => v],
+  ['cpu_cores', 'İşlemci Çekirdek Sayısı', v => v],
+  ['ram_gb', 'RAM', v => `${v} GB`],
+  ['storage_gb', 'Depolama', v => (v >= 1024 && v % 1024 === 0) ? `${v / 1024} TB` : `${v} GB`],
+  ['storage_type', 'Depolama Türü', v => v],
+  ['gpu', 'Ekran Kartı', v => v],
+  ['screen_inch', 'Ekran Boyutu', v => `${v}"`],
+  ['screen_resolution', 'Ekran Çözünürlüğü', v => v],
+  ['refresh_rate_hz', 'Ekran Yenileme Hızı', v => `${v}Hz`],
+  ['has_touchscreen', 'Dokunmatik Ekran', v => (v ? 'Var' : 'Yok')],
+  ['battery_wh', 'Batarya Kapasitesi', v => `${v} Wh`],
+  ['weight_g', 'Ağırlık', v => (v >= 1000 ? `${(v / 1000).toLocaleString('tr-TR', { maximumFractionDigits: 2 })} kg` : `${v} g`)],
+  ['has_backlit_keyboard', 'Aydınlatmalı Klavye', v => (v ? 'Var' : 'Yok')],
+  ['has_fingerprint', 'Parmak İzi Okuyucu', v => (v ? 'Var' : 'Yok')],
+  ['webcam_mp', 'Webcam', v => `${v} MP`],
+  ['ports', 'Bağlantı Noktaları', v => Array.isArray(v) ? v.join(', ') : v],
+  ['os', 'İşletim Sistemi', v => v],
   ['release_year', 'Çıkış Yılı', v => v],
 ];
 
@@ -174,6 +222,8 @@ const PAGE_STYLE = `
   }
   .variant-pill.selected{border-color:var(--signal);background:var(--signal-soft);color:var(--signal)}
   .offer-variant-tag{font-size:11px;color:var(--muted);font-weight:500;font-family:'IBM Plex Mono',monospace}
+  .offer-row-out{opacity:.55}
+  .stock-badge{font-size:9.5px;font-weight:700;color:#ff6b6b;text-transform:uppercase;letter-spacing:.03em}
   section{margin-bottom:36px}
   section h2{font-size:18px;margin:0 0 16px}
   table.spec-table{width:100%;border-collapse:collapse;font-size:13.5px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);overflow:hidden}
@@ -181,6 +231,16 @@ const PAGE_STYLE = `
   table.spec-table tr:last-child th,table.spec-table tr:last-child td{border-bottom:none}
   table.spec-table th{color:var(--muted);font-weight:500;width:46%}
   table.spec-table td{font-family:'IBM Plex Mono',monospace}
+  .price-history-chart{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 16px 10px}
+  .price-history-chart svg{width:100%;height:auto;display:block;overflow:visible}
+  .ph-line{fill:none;stroke:var(--signal);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+  .ph-area{fill:var(--signal-soft);opacity:.6}
+  .ph-axis-label{font-size:10.5px;fill:var(--muted);font-family:'IBM Plex Mono',monospace}
+  .ph-grid{stroke:var(--border);stroke-width:1}
+  .ph-point{fill:var(--bg);stroke:var(--signal);stroke-width:2}
+  .ph-summary{display:flex;gap:22px;margin-top:14px;flex-wrap:wrap}
+  .ph-summary-item{font-size:12px;color:var(--muted)}
+  .ph-summary-item b{display:block;font-size:15px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-weight:600;margin-top:2px}
   .offer-row{
     background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:10px;
   }
@@ -202,6 +262,13 @@ const THUMB_SVG = `<svg viewBox="0 0 64 64" aria-hidden="true">
   <rect class="thumb-screen" x="24" y="12.5" width="16" height="33" rx="1.5"/>
   <rect class="thumb-detail" x="27" y="8.5" width="10" height="1.8" rx=".9"/>
   <circle class="thumb-detail" cx="32" cy="50.5" r="1.7"/>
+</svg>`;
+
+// Laptop için basit ekran+taban siluet — telefon ikonuyla karıştırılmasın.
+const THUMB_SVG_LAPTOP = `<svg viewBox="0 0 64 64" aria-hidden="true">
+  <rect class="thumb-body" x="12" y="10" width="40" height="28" rx="2.5"/>
+  <rect class="thumb-screen" x="15" y="13" width="34" height="22" rx="1"/>
+  <path class="thumb-detail" d="M6 46h52l4 6H2z"/>
 </svg>`;
 
 // index.html ile aynı favicon — /urun/:id sayfalarında hiç yoktu.
@@ -236,9 +303,14 @@ ${renderNav(frontendUrl)}
 }
 
 function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
+  const isLaptop = product.category === 'laptop';
+  const activeSpecLabels = isLaptop ? LAPTOP_SPEC_LABELS : SPEC_LABELS;
   const specs = product.specs || {};
   const offers = [...(product.offers || [])].sort((a, b) => a.price - b.price);
-  const best = offers[0];
+  // inStockFirst: en ucuz teklif TESADÜFEN stokta değilse, hero fiyat/
+  // Satıcıya Git linki/JSON-LD onun yerine bir sonraki GERÇEKTEN stoktaki
+  // teklife düşsün (bkz. yukarıdaki fonksiyonun tam açıklaması).
+  const best = inStockFirst(offers).sort((a, b) => a.price - b.price)[0];
   const slug = slugify(product.canonical_name);
   const canonicalUrl = `${backendUrl}/urun/${product.id}/${slug}`;
   const title = `${product.canonical_name} Fiyatları ve Özellikleri — Makulbul`;
@@ -263,9 +335,13 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
     if (!variantGroups.has(key)) variantGroups.set(key, { storage_gb: o.storage_gb, color: o.color, offers: [] });
     variantGroups.get(key).offers.push(o);
   }
+  // Varyantlar da AYNI şekilde stok-öncelikli sıralanıyor — aksi halde
+  // "en ucuz varyant" tesadüfen tükenmiş bir teklife sahip olabilir ve
+  // sayfa ilk açılışta o varyantı (ve onun tükenmiş fiyatını) seçili
+  // gösterirdi.
   const variants = [...variantGroups.values()]
     .map(v => ({ ...v, offers: v.offers.sort((a, b) => a.price - b.price) }))
-    .sort((a, b) => a.offers[0].price - b.offers[0].price);
+    .sort((a, b) => inStockFirst(a.offers)[0].price - inStockFirst(b.offers)[0].price);
   const hasVariantPicker = variants.length > 1;
   const defaultVariant = variants[0];
   const storageOptions = [...new Set(variants.map(v => v.storage_gb))].sort((a, b) => a - b);
@@ -277,7 +353,7 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
   // görürse "Depolama: 128 GB" yazarken üstteki fiyat/teklif aslında
   // 512GB'a ait olur, tutarsız görünür.
   const displayStorageGb = hasVariantPicker ? defaultVariant.storage_gb : specs.storage_gb;
-  const specRows = SPEC_LABELS
+  const specRows = activeSpecLabels
     .filter(([key]) => specs[key] !== undefined && specs[key] !== null)
     .map(([key, label, fmtFn]) => `<tr><th>${esc(label)}</th><td${key === 'storage_gb' ? ' id="spec-storage-value"' : ''}>${esc(key === 'storage_gb' ? fmtFn(displayStorageGb) : fmtFn(specs[key]))}</td></tr>`)
     .join('');
@@ -311,11 +387,16 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
     const tag = hasVariantPicker && (o.storage_gb || o.color)
       ? ` <span class="offer-variant-tag">${o.storage_gb ? formatGb(o.storage_gb) : ''}${o.storage_gb && o.color ? ', ' : ''}${esc(o.color || '')}</span>`
       : '';
+    // public/index.html'deki (client-side teklif satırı render'ı) AYNI
+    // "Stokta yok" etiketi — bu sayfa in_stock'u ÇEKİYORDU ama hiç
+    // GÖSTERMİYORDU, kullanıcı tükenmiş bir teklifi normal bir teklifle
+    // ayırt edemiyordu.
+    const outOfStock = o.in_stock === false;
     return `
-    <div class="offer-row">
+    <div class="offer-row${outOfStock ? ' offer-row-out' : ''}">
       <div class="offer-row-top">
         <div class="offer-row-info">
-          <span class="offer-seller">${esc(o.seller_name)}${tag}</span>
+          <span class="offer-seller">${esc(o.seller_name)}${tag}${outOfStock ? ' <span class="stock-badge">Stokta yok</span>' : ''}</span>
           <span class="offer-price">${fmtTL(o.price)}</span>
         </div>
         <a class="offer-buy" href="${esc(backendUrl)}/satici-git/${esc(o.id)}" target="_blank" rel="nofollow sponsored noopener">Satıcıya Git <span class="ad-tag">Reklam</span></a>
@@ -347,7 +428,13 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
       lowPrice: Number(best.price),
       highPrice: Number(offers[offers.length - 1].price),
       offerCount: offers.length,
-      availability: 'https://schema.org/InStock',
+      // KRİTİK: sabit 'InStock' YERİNE best'in GERÇEK durumu — best artık
+      // inStockFirst() ile seçildiği için normalde her zaman gerçekten
+      // stokta, ama HİÇBİR teklif stokta değilse (inStockFirst tüm
+      // tekliflere geri düştüğünde) Google'a da dürüstçe OutOfStock
+      // bildirilmeli — aksi halde Google Alışveriş'e "stokta" diye
+      // aslında satılamayan bir ürün gönderilmiş olurdu.
+      availability: best.in_stock === false ? 'https://schema.org/OutOfStock' : 'https://schema.org/InStock',
     },
   } : null;
 
@@ -388,10 +475,10 @@ ${jsonLd ? `<script type="application/ld+json">${JSON.stringify(jsonLd).replace(
 <body>
 ${renderNav(frontendUrl)}
 <main class="wrap">
-  <a class="back-link" href="${frontendUrl}/index.html#catalog">← Tüm modellere dön</a>
+  <a class="back-link" href="${frontendUrl}/index.html${isLaptop ? '?cat=laptop' : ''}#catalog">← Tüm ${isLaptop ? 'laptoplara' : 'modellere'} dön</a>
 
   <div class="product-hero">
-    <div class="hero-thumb">${THUMB_SVG}</div>
+    <div class="hero-thumb">${isLaptop ? THUMB_SVG_LAPTOP : THUMB_SVG}</div>
     <div class="hero-info">
       <span class="brand-badge">${esc(product.brand)}</span>
       <h1>${esc(displayModelName(product.canonical_name))}</h1>
@@ -416,13 +503,88 @@ ${renderNav(frontendUrl)}
 
   <section>
     <h2>Fiyat geçmişi</h2>
-    <p class="muted">Yakında</p>
+    <div id="price-history">
+      <p class="muted">Fiyat geçmişi yükleniyor…</p>
+    </div>
   </section>
 </main>
 
 <script>
 (function(){
   var API_BASE = ${JSON.stringify(backendUrl)};
+  var PRODUCT_ID = ${JSON.stringify(product.id)};
+
+  // Fiyat geçmişi grafiği — /api/products/:id/price-history ENDPOINT'İ
+  // ZATEN VARDI ve doğru veri döndürüyordu, ama bu sayfa onu hiç
+  // çağırmıyordu; "Fiyat geçmişi" bölümü sabit "Yakında" yazan bir
+  // yer tutucuydu. Bağımlılık eklememek için (bkz. dosya başındaki
+  // "şablon motoru yok" felsefesi) küçük, elle yazılmış bir SVG çizgi
+  // grafiği — harici bir kütüphane gerekmiyor.
+  (function loadPriceHistory(){
+    var container = document.getElementById('price-history');
+    if (!container) return;
+    fetch(API_BASE + '/api/products/' + encodeURIComponent(PRODUCT_ID) + '/price-history?days=90')
+      .then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function(rows){
+        if (!Array.isArray(rows) || rows.length < 2) {
+          container.innerHTML = '<p class="muted">Bu ürün için henüz yeterli fiyat geçmişi birikmedi.</p>';
+          return;
+        }
+        var points = rows.map(function(r){ return { date: new Date(r.date), price: Number(r.price) }; });
+        var prices = points.map(function(p){ return p.price; });
+        var minPrice = Math.min.apply(null, prices);
+        var maxPrice = Math.max.apply(null, prices);
+        // Fiyat tamamen sabitse (tek bir değer) grafik düz bir çizgi olur —
+        // bölme sıfıra düşmesin diye küçük bir yapay aralık veriyoruz.
+        var priceRange = (maxPrice - minPrice) || Math.max(1, maxPrice * 0.05);
+        var padTop = minPrice === maxPrice ? priceRange : priceRange * 0.12;
+        var yMin = minPrice - padTop, yMax = maxPrice + padTop;
+
+        var W = 640, H = 180, padL = 8, padR = 8, padT = 14, padB = 26;
+        var plotW = W - padL - padR, plotH = H - padT - padB;
+        var xAt = function(i){ return padL + (points.length === 1 ? plotW / 2 : (i / (points.length - 1)) * plotW); };
+        var yAt = function(p){ return padT + plotH - ((p - yMin) / (yMax - yMin)) * plotH; };
+
+        var linePts = points.map(function(p, i){ return xAt(i).toFixed(1) + ',' + yAt(p.price).toFixed(1); }).join(' ');
+        var areaPts = linePts + ' ' + xAt(points.length - 1).toFixed(1) + ',' + (padT + plotH) + ' ' + xAt(0).toFixed(1) + ',' + (padT + plotH);
+
+        var fmtDate = function(d){ return d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' }); };
+        var fmtPrice = function(n){ return Number(n).toLocaleString('tr-TR') + ' TL'; };
+
+        // Sadece ucuz/pahalı uç noktalara (min/max fiyata sahip günlere)
+        // bir nokta işaretçisi koyuyoruz — her güne koymak (90 gün olabilir)
+        // grafiği görsel olarak boğardı.
+        var minIdx = prices.indexOf(minPrice), maxIdx = prices.indexOf(maxPrice);
+        var markerIdx = [0, points.length - 1, minIdx, maxIdx].filter(function(v, i, arr){ return arr.indexOf(v) === i; });
+        var markers = markerIdx.map(function(i){
+          return '<circle class="ph-point" cx="' + xAt(i).toFixed(1) + '" cy="' + yAt(points[i].price).toFixed(1) + '" r="3.2"></circle>';
+        }).join('');
+
+        var svg = '' +
+          '<svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none" role="img" aria-label="Son ' + points.length + ' günün fiyat geçmişi grafiği">' +
+          '<line class="ph-grid" x1="' + padL + '" y1="' + padT + '" x2="' + (W - padR) + '" y2="' + padT + '"></line>' +
+          '<line class="ph-grid" x1="' + padL + '" y1="' + (padT + plotH) + '" x2="' + (W - padR) + '" y2="' + (padT + plotH) + '"></line>' +
+          '<polygon class="ph-area" points="' + areaPts + '"></polygon>' +
+          '<polyline class="ph-line" points="' + linePts + '"></polyline>' +
+          markers +
+          '<text class="ph-axis-label" x="' + padL + '" y="' + (H - 6) + '">' + fmtDate(points[0].date) + '</text>' +
+          '<text class="ph-axis-label" x="' + (W - padR) + '" y="' + (H - 6) + '" text-anchor="end">' + fmtDate(points[points.length - 1].date) + '</text>' +
+          '</svg>';
+
+        var latest = points[points.length - 1].price;
+        var summary = '' +
+          '<div class="ph-summary">' +
+          '<div class="ph-summary-item">Bu dönemin en düşüğü<b>' + fmtPrice(minPrice) + '</b></div>' +
+          '<div class="ph-summary-item">Bu dönemin en yükseği<b>' + fmtPrice(maxPrice) + '</b></div>' +
+          '<div class="ph-summary-item">Güncel<b>' + fmtPrice(latest) + '</b></div>' +
+          '</div>';
+
+        container.innerHTML = '<div class="price-history-chart">' + svg + summary + '</div>';
+      })
+      .catch(function(){
+        container.innerHTML = '<p class="muted">Fiyat geçmişi şu an yüklenemedi.</p>';
+      });
+  })();
 
   // Birinci taraf, kimliksiz sayfa görüntüleme sayacı — index.html'deki
   // aynı notla aynı sebepten (bkz. orada): sayfa yüklenir yüklenmez,
@@ -515,8 +677,9 @@ ${renderNav(frontendUrl)}
     function renderOfferRows(offerList, gb){
       offerRowsContainerEl.innerHTML = offerList.map(function(o){
         var tag = (gb || o.color) ? ' <span class="offer-variant-tag">' + (gb ? formatGb(gb) : '') + (gb && o.color ? ', ' : '') + escHtml(o.color || '') + '</span>' : '';
-        return '<div class="offer-row"><div class="offer-row-top"><div class="offer-row-info">' +
-          '<span class="offer-seller">' + escHtml(o.seller_name) + tag + '</span>' +
+        var outOfStock = o.in_stock === false;
+        return '<div class="offer-row' + (outOfStock ? ' offer-row-out' : '') + '"><div class="offer-row-top"><div class="offer-row-info">' +
+          '<span class="offer-seller">' + escHtml(o.seller_name) + tag + (outOfStock ? ' <span class="stock-badge">Stokta yok</span>' : '') + '</span>' +
           '<span class="offer-price">' + fmt(o.price) + '</span></div>' +
           '<a class="offer-buy" href="' + API_BASE + '/satici-git/' + encodeURIComponent(o.id) + '" target="_blank" rel="nofollow sponsored noopener">Satıcıya Git <span class="ad-tag">Reklam</span></a></div>' +
           '</div>';
@@ -536,10 +699,17 @@ ${renderNav(frontendUrl)}
         btn.addEventListener('click', function(){ selectVariant(gb, btn.getAttribute('data-color')); });
       });
     }
+    // Sunucu tarafındaki inStockFirst() ile AYNI mantık (bkz. product-page.js
+    // başındaki tam açıklama) — varyant değiştirildiğinde de en ucuz
+    // teklif tesadüfen stokta değilse ona düşülmesin.
+    function inStockFirst(offerList){
+      var inStock = offerList.filter(function(o){ return o.in_stock !== false; });
+      return inStock.length ? inStock : offerList;
+    }
     function selectVariant(gb, color){
       var match = variants.filter(function(v){ return v.storage_gb === gb && v.color === color; })[0] || variantsForStorage(gb)[0];
       if (!match) return;
-      var best = match.offers[0];
+      var best = inStockFirst(match.offers).slice().sort(function(a, b){ return a.price - b.price; })[0];
       priceBigEl.textContent = fmt(best.price);
       sellerLineEl.textContent = best.seller_name + ' üzerinden en uygun fiyat · ' + match.offers.length + ' satıcı karşılaştırıldı';
       if (offersHeadingEl) offersHeadingEl.textContent = 'Satıcılar (' + match.offers.length + ')';

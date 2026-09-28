@@ -155,6 +155,15 @@
   }
   .ai-search button:hover{background:#9298ff}
 
+  .category-switch{
+    display:inline-flex;gap:4px;background:var(--surface);border:1px solid var(--border);
+    padding:4px;border-radius:11px;margin-bottom:22px;
+  }
+  .category-switch button{
+    border:none;background:transparent;font-size:13.5px;font-weight:600;padding:8px 17px;
+    border-radius:8px;cursor:pointer;color:var(--muted);transition:.15s;
+  }
+  .category-switch button.active{background:var(--signal);color:#fff}
   .chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px;max-width:640px}
   .chip{
     font-size:13px;font-weight:500;background:var(--surface);border:1px solid var(--border);
@@ -245,7 +254,6 @@
   .brand-badge{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--signal);display:block;margin-bottom:6px;transition:color .15s}
   .card-link h3{transition:color .15s}
   .card h3{font-size:17px;margin:0 0 10px;line-height:1.3;color:var(--text);padding-right:30px}
-  .spec-line{font-size:13px;color:var(--muted);font-family:'IBM Plex Mono',monospace;margin-bottom:8px}
   .nfc-badge{
     display:inline-block;font-size:11px;font-weight:700;color:#aab0ff;background:var(--signal-soft);
     padding:3px 9px;border-radius:6px;margin-bottom:16px;
@@ -301,6 +309,15 @@
   .price-history{display:none;margin-top:10px;background:var(--bg);border-radius:8px;padding:11px 12px}
   .price-history.open{display:block}
   .history-loading{font-size:12px;color:var(--muted);margin:0;padding:2px 0}
+  .ph-chart svg{width:100%;height:auto;display:block;overflow:visible}
+  .ph-line{fill:none;stroke:var(--signal);stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+  .ph-area{fill:var(--signal-soft);opacity:.7}
+  .ph-axis-label{font-size:9.5px;fill:var(--muted);font-family:'IBM Plex Mono',monospace}
+  .ph-grid{stroke:var(--border);stroke-width:1}
+  .ph-point{fill:var(--bg);stroke:var(--signal);stroke-width:2}
+  .ph-summary{display:flex;gap:14px;margin-top:9px;flex-wrap:wrap}
+  .ph-summary-item{font-size:10.5px;color:var(--muted)}
+  .ph-summary-item b{display:block;font-size:12.5px;color:var(--text);font-family:'IBM Plex Mono',monospace;font-weight:600;margin-top:1px}
 
 
   .cookie-banner{
@@ -394,20 +411,20 @@
   <div class="wrap">
     <a href="#hero" class="logo"><span class="dot"></span>Makulbul</a>
     <nav>
-      <a href="#catalog">Telefonlar</a>
+      <a href="#catalog">Katalog</a>
       <a href="#how">Nasıl Çalışır</a>
       <a href="#about">Hakkımızda</a>
       <a href="#contact">İletişim</a>
     </nav>
     <div class="nav-right">
-      <a class="nav-cta" href="#catalog">Telefon Bul</a>
+      <a class="nav-cta" href="#catalog" id="navCta">Telefon Bul</a>
       <button class="nav-burger" id="navBurger" aria-label="Menüyü aç" aria-expanded="false">
         <span></span><span></span><span></span>
       </button>
     </div>
   </div>
   <div class="nav-mobile" id="navMobile" role="navigation" aria-label="Mobil menü">
-    <a href="#catalog">Telefonlar</a>
+    <a href="#catalog">Katalog</a>
     <a href="#how">Nasıl Çalışır</a>
     <a href="#about">Hakkımızda</a>
     <a href="#contact">İletişim</a>
@@ -416,9 +433,13 @@
 
 <section class="hero" id="hero">
   <div class="wrap">
+    <div class="category-switch" id="categorySwitch">
+      <button class="active" data-cat="telefon">📱 Telefonlar</button>
+      <button data-cat="laptop">💻 Laptoplar</button>
+    </div>
     <span class="eyebrow">● Yapay zeka destekli fiyat karşılaştırma</span>
-    <h1>İhtiyacını yaz, <em>en ucuz telefonu</em><br>en uygun satıcıdan bulalım.</h1>
-    <p class="sub">Onlarca siteyi tek tek gezmek yerine, ne istediğini bize söyle — bütçeni ve önemli özelliklerini yapay zeka ile karşılaştırıp sana en mantıklı seçeneği gösterelim. Telefon kategorisiyle başlıyoruz, katalog ve kategoriler zamanla büyüyecek.</p>
+    <h1 id="heroTitle">İhtiyacını yaz, <em>en ucuz telefonu</em><br>en uygun satıcıdan bulalım.</h1>
+    <p class="sub" id="heroSub">Onlarca siteyi tek tek gezmek yerine, ne istediğini bize söyle — bütçeni ve önemli özelliklerini yapay zeka ile karşılaştırıp sana en mantıklı seçeneği gösterelim. Telefon kategorisiyle başlıyoruz, katalog ve kategoriler zamanla büyüyecek.</p>
 
     <div class="ai-search">
       <input id="aiInput" type="text" placeholder="örn. NFC'li, 25.000 TL altı, kamerası iyi bir telefon" />
@@ -447,7 +468,7 @@
 <section class="catalog" id="catalog">
   <div class="wrap">
     <div class="catalog-head">
-      <h2>Tüm modeller</h2>
+      <h2 id="catalogTitle">Tüm modeller</h2>
       <div class="brand-filter" id="brandFilter">
         <button class="active" data-brand="all">Tümü</button>
         <button data-brand="Apple">Apple</button>
@@ -574,6 +595,12 @@ function mapApiProduct(apiProduct){
     id: apiProduct.id,
     brand: apiProduct.brand,
     name: apiProduct.canonical_name,
+    // API çağrısı zaten currentCategory'ye göre filtrelenmiş geldiği
+    // için (bkz. loadProducts) bu listenin TAMAMI aynı kategoriden —
+    // her ürüne o anki kategoriyi damgalamak, kartın hangi spec
+    // setini (telefon mu laptop mu) göstereceğine karar vermek için
+    // yeterli, sunucudan ayrıca category alanı istemeye gerek yok.
+    category: currentCategory,
     ram: s.ram_gb, storage: s.storage_gb, screen: s.screen_inch,
     refreshRate: s.refresh_rate_hz,
     battery: s.battery_mah, chip: s.chip, camera: s.main_camera_mp,
@@ -591,6 +618,12 @@ function mapApiProduct(apiProduct){
     headphoneJack: !!s.has_headphone_jack, expandableStorage: !!s.has_expandable_storage,
     cameraButton: !!s.has_camera_button,
     colors: Array.isArray(s.colors) ? s.colors : [],
+    // Laptop'a özgü alanlar — telefon ürünlerinde hepsi undefined kalır,
+    // cardHTML zaten bu alanları sadece category==='laptop' iken okuyor.
+    cpu: s.cpu, gpu: s.gpu, os: s.os, storageType: s.storage_type,
+    screenResolution: s.screen_resolution, batteryWh: s.battery_wh,
+    hasTouchscreen: !!s.has_touchscreen, hasBacklitKeyboard: !!s.has_backlit_keyboard,
+    hasFingerprint: !!s.has_fingerprint, webcamMp: s.webcam_mp,
     minPrice30d: apiProduct.min_price_30d != null ? Number(apiProduct.min_price_30d) : null,
     offers: (apiProduct.offers || []).map(o => ({
       id: o.id,
@@ -606,7 +639,7 @@ async function loadProducts(){
   const grid = document.getElementById('grid');
   grid.innerHTML = '<p style="color:var(--muted);grid-column:1/-1">Ürünler yükleniyor...</p>';
   try {
-    const res = await fetch(`${API_BASE}/api/products`);
+    const res = await fetch(`${API_BASE}/api/products?category=${currentCategory}`);
     if(!res.ok) throw new Error('API hatası: ' + res.status);
     const data = await res.json();
     PHONES = data.map(mapApiProduct);
@@ -652,7 +685,11 @@ function slugify(text){
 // değil, modelin sabit bir parçası).
 function displayModelName(name){
   return String(name || '')
-    .replace(/\s*\b\d+\s?(GB|TB)\b/i, '')
+    // product-page.js'teki AYNI düzeltme — "g" bayrağı ve laptop
+    // adlarındaki "16GB/512GB" kalıbının artık anlamsız kalan "/"
+    // ayracı hakkında oradaki notlara bakın.
+    .replace(/\s*\b\d+\s?(GB|TB)\b/gi, '')
+    .replace(/\//g, ' ')
     .replace(/\s{2,}/g, ' ')
     .trim();
 }
@@ -699,6 +736,103 @@ function colorSwatchHex(name){
   return '#9a9a9a';
 }
 
+/* ================= KATEGORİ (Telefon/Laptop) =================
+   Aynı sayfada iki kategori: hero metni, hızlı filtre çipleri, marka
+   listesi, sıralama seçenekleri VE backend'e giden istekler (/api/
+   products?category=, /api/ai-search body'sindeki category) bu tek
+   değişkene göre değişiyor. Ürün detay sayfasından (product-page.js,
+   laptop ürünlerinde) "?cat=laptop#catalog" ile geri dönüldüğünde de
+   doğru sekme otomatik seçili gelsin diye URL'den okunuyor. */
+let currentCategory = new URLSearchParams(location.search).get('cat') === 'laptop' ? 'laptop' : 'telefon';
+
+const CATEGORY_CONFIG = {
+  telefon: {
+    heroTitle: 'İhtiyacını yaz, <em>en ucuz telefonu</em><br>en uygun satıcıdan bulalım.',
+    heroSub: 'Onlarca siteyi tek tek gezmek yerine, ne istediğini bize söyle — bütçeni ve önemli özelliklerini yapay zeka ile karşılaştırıp sana en mantıklı seçeneği gösterelim.',
+    aiPlaceholder: "örn. NFC'li, 25.000 TL altı, kamerası iyi bir telefon",
+    catalogTitle: 'Tüm telefonlar',
+    navCta: 'Telefon Bul',
+    notFoundLabel: 'telefon',
+    chips: [
+      { q: "NFC'li 20.000 TL altı", label: "NFC'li · 20.000 TL altı" },
+      { q: 'kamerası iyi 40.000 TL altı', label: 'Kamera odaklı · 40.000 TL altı' },
+      { q: 'pili uzun giden ucuz telefon', label: 'Uzun pilli · Ekonomik' },
+      { q: 'en güçlü telefon', label: 'En güçlü model' },
+      { q: 'hafif ve kompakt telefon', label: 'Hafif · Kompakt' },
+      { q: 'hızlı şarj olan telefon', label: 'Hızlı Şarj' },
+      { q: 'kablosuz şarj destekleyen telefon', label: 'Kablosuz Şarj' },
+    ],
+    brands: ['Apple', 'Samsung', 'Xiaomi', 'Google', 'OnePlus', 'Sony', 'Honor'],
+    sorts: [
+      { key: 'price-asc', label: 'En Uygun Fiyat' },
+      { key: 'battery-desc', label: 'Pil Süresi' },
+      { key: 'camera-desc', label: 'Kamera' },
+    ],
+  },
+  laptop: {
+    heroTitle: 'İhtiyacını yaz, <em>en uygun laptopu</em><br>en uygun satıcıdan bulalım.',
+    heroSub: 'Oyun, öğrenci, tasarım ya da günlük kullanım — ne için aradığını bize söyle, bütçeni ve önemli özelliklerini yapay zeka ile karşılaştırıp sana en mantıklı seçeneği gösterelim.',
+    aiPlaceholder: 'örn. oyun için güçlü, 50.000 TL altı bir laptop',
+    catalogTitle: 'Tüm laptoplar',
+    navCta: 'Laptop Bul',
+    notFoundLabel: 'laptop',
+    chips: [
+      { q: 'oyun için güçlü laptop', label: 'Oyun · Güçlü Ekran Kartı' },
+      { q: 'öğrenci için hafif laptop', label: 'Öğrenci · Hafif' },
+      { q: 'video düzenleme için güçlü laptop', label: 'Tasarım · Video Düzenleme' },
+      { q: 'programlama için laptop', label: 'Yazılım Geliştirme' },
+      { q: 'ofis için uzun pilli laptop', label: 'Ofis · Uzun Pilli' },
+      { q: 'apple laptop', label: 'macOS' },
+      { q: '30000 TL altı ucuz laptop', label: 'Ekonomik' },
+    ],
+    brands: ['Apple', 'ASUS', 'Acer', 'Lenovo', 'HP', 'Dell', 'MSI', 'Casper', 'MONSTER', 'Huawei', 'Microsoft'],
+    sorts: [
+      { key: 'price-asc', label: 'En Uygun Fiyat' },
+      { key: 'ram-desc', label: 'RAM' },
+      { key: 'screen-desc', label: 'Ekran Boyutu' },
+    ],
+  },
+};
+
+// Hero/katalog başlığı, hızlı çipler, marka listesi ve sıralama
+// seçeneklerini seçili kategoriye göre yeniden çizer. loadProducts()'tan
+// AYRI tutuluyor çünkü bu saf DOM/metin güncellemesi — yeni bir API
+// isteği gerektirmiyor.
+function applyCategoryUI(){
+  const cfg = CATEGORY_CONFIG[currentCategory];
+  document.querySelectorAll('#categorySwitch button').forEach(b=>{
+    b.classList.toggle('active', b.dataset.cat === currentCategory);
+  });
+  document.getElementById('heroTitle').innerHTML = cfg.heroTitle;
+  document.getElementById('heroSub').textContent = cfg.heroSub;
+  document.getElementById('aiInput').placeholder = cfg.aiPlaceholder;
+  document.getElementById('catalogTitle').textContent = cfg.catalogTitle;
+  document.getElementById('navCta').textContent = cfg.navCta;
+
+  document.getElementById('quickChips').innerHTML = cfg.chips
+    .map(c => `<button class="chip" data-q="${escHtml(c.q)}">${escHtml(c.label)}</button>`).join('');
+  document.querySelectorAll('#quickChips .chip').forEach(chip=>{
+    chip.addEventListener('click', ()=>{
+      document.getElementById('aiInput').value = chip.dataset.q;
+      runAISearch(chip.dataset.q);
+    });
+  });
+
+  document.getElementById('brandFilter').innerHTML =
+    '<button class="active" data-brand="all">Tümü</button>' +
+    cfg.brands.map(b => `<button data-brand="${escHtml(b)}">${escHtml(b)}</button>`).join('');
+  currentBrand = 'all';
+
+  document.getElementById('sortFilter').innerHTML =
+    '<span class="sort-label">Sırala:</span>' +
+    cfg.sorts.map((s,i) => `<button class="${i===0?'active':''}" data-sort="${s.key}">${escHtml(s.label)}</button>`).join('');
+  currentSort = cfg.sorts[0].key;
+
+  // AI önerisi kutusu bir önceki kategoriden kalma bir sonuç
+  // gösteriyor olabilir — kategori değişince anlamsızlaşır, gizle.
+  document.getElementById('aiPick').classList.remove('show');
+}
+
 /* ================= RENDER GRID ================= */
 let currentBrand = 'all';
 let currentSort = 'price-asc';
@@ -739,8 +873,19 @@ function sortPhones(list){
   const l = [...list];
   if(currentSort==='price-asc') l.sort((a,b)=>priceSortCompare(a,b,true));
   if(currentSort==='price-desc') l.sort((a,b)=>priceSortCompare(a,b,false));
-  if(currentSort==='battery-desc') l.sort((a,b)=>b.battery-a.battery);
-  if(currentSort==='camera-desc') l.sort((a,b)=>b.camera-a.camera);
+  // KRİTİK: ram-desc/screen-desc'teki gibi ||0 GEREKLİ — şu an kataloğun
+  // TAMAMINDA battery_mah/main_camera_mp dolu olduğu için hiç görünmüyor
+  // ama biri eksik veri ile eklenirse (undefined - sayı = NaN) sıralama
+  // sessizce bozulur, o ürün rastgele bir yere düşer (fiyat sıralamasının
+  // aksine, hep sona atılmaz).
+  if(currentSort==='battery-desc') l.sort((a,b)=>(b.battery||0)-(a.battery||0));
+  if(currentSort==='camera-desc') l.sort((a,b)=>(b.camera||0)-(a.camera||0));
+  // Laptop'a özgü sıralamalar — CPU/GPU "güç" sıralaması (chip-tiers-
+  // laptop.js'teki tabloyu istemci tarafında ikinci kez tutmamak için)
+  // burada YOK; onu istemek isteyen kullanıcı AI aramayı ("en güçlü
+  // laptop") kullanıyor, backend zaten o tabloyu kullanıyor.
+  if(currentSort==='ram-desc') l.sort((a,b)=>(b.ram||0)-(a.ram||0));
+  if(currentSort==='screen-desc') l.sort((a,b)=>(b.screen||0)-(a.screen||0));
   return l;
 }
 
@@ -856,9 +1001,59 @@ function renderGrid(overrideList){
 }
 
 /* ================= FİYAT GEÇMİŞİ ================= */
-// Gerçek bir fiyat geçmişi verisi henüz yok (görülen "geçmiş" önceden
-// simüle edilmiş/tohum veriydi) — yanıltıcı olmaması için grafik yerine
-// dürüstçe "Yakında" gösteriliyor. API'den veri çekmiyoruz artık.
+// ESKİDEN: bu panel sabit "Yakında" gösteriyordu çünkü o an price_history
+// tablosundaki veri seed-price-history.js'in ürettiği SENTETİK/simüle
+// demo veriydi (bkz. o dosyanın kendi yorumu) — yanıltıcı olmaması için
+// bilinçli olarak devre dışı bırakılmıştı. ARTIK: price_history her
+// gerçek /api/ingest-offer çağrısında match-product.js tarafından
+// otomatik dolduruluyor (sentetik veri temizlendi) — yani veri artık
+// GERÇEK, sadece henüz az (yeni biriktiği için). O yüzden panel tekrar
+// açıldı: veri varsa gerçek bir mini grafik, YETERSİZse (< 2 gün) hâlâ
+// dürüstçe "henüz yeterli veri yok" diyor — hiçbir zaman sahte/simüle
+// veri göstermiyor.
+function renderMiniPriceHistory(rows){
+  if (!Array.isArray(rows) || rows.length < 2) {
+    return '<p class="history-loading">Bu ürün için henüz yeterli fiyat geçmişi birikmedi.</p>';
+  }
+  const points = rows.map(r => ({ date: new Date(r.date), price: Number(r.price) }));
+  const prices = points.map(p => p.price);
+  const minPrice = Math.min(...prices), maxPrice = Math.max(...prices);
+  const priceRange = (maxPrice - minPrice) || Math.max(1, maxPrice * 0.05);
+  const padTop = minPrice === maxPrice ? priceRange : priceRange * 0.12;
+  const yMin = minPrice - padTop, yMax = maxPrice + padTop;
+
+  const W = 400, H = 110, padL = 4, padR = 4, padT = 10, padB = 18;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const xAt = i => padL + (points.length === 1 ? plotW / 2 : (i / (points.length - 1)) * plotW);
+  const yAt = p => padT + plotH - ((p - yMin) / (yMax - yMin)) * plotH;
+
+  const linePts = points.map((p, i) => `${xAt(i).toFixed(1)},${yAt(p.price).toFixed(1)}`).join(' ');
+  const areaPts = `${linePts} ${xAt(points.length-1).toFixed(1)},${padT+plotH} ${xAt(0).toFixed(1)},${padT+plotH}`;
+  const fmtDate = d => d.toLocaleDateString('tr-TR', { day: 'numeric', month: 'short' });
+
+  const minIdx = prices.indexOf(minPrice), maxIdx = prices.indexOf(maxPrice);
+  const markerIdx = [...new Set([0, points.length - 1, minIdx, maxIdx])];
+  const markers = markerIdx.map(i => `<circle class="ph-point" cx="${xAt(i).toFixed(1)}" cy="${yAt(points[i].price).toFixed(1)}" r="2.6"></circle>`).join('');
+
+  const svg = `<div class="ph-chart"><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Son ${points.length} günün fiyat geçmişi">
+    <line class="ph-grid" x1="${padL}" y1="${padT}" x2="${W-padR}" y2="${padT}"></line>
+    <line class="ph-grid" x1="${padL}" y1="${padT+plotH}" x2="${W-padR}" y2="${padT+plotH}"></line>
+    <polygon class="ph-area" points="${areaPts}"></polygon>
+    <polyline class="ph-line" points="${linePts}"></polyline>
+    ${markers}
+    <text class="ph-axis-label" x="${padL}" y="${H-4}">${escHtml(fmtDate(points[0].date))}</text>
+    <text class="ph-axis-label" x="${W-padR}" y="${H-4}" text-anchor="end">${escHtml(fmtDate(points[points.length-1].date))}</text>
+  </svg></div>`;
+
+  const summary = `<div class="ph-summary">
+    <div class="ph-summary-item">En düşük<b>${fmt(minPrice)}</b></div>
+    <div class="ph-summary-item">En yüksek<b>${fmt(maxPrice)}</b></div>
+    <div class="ph-summary-item">Güncel<b>${fmt(points[points.length-1].price)}</b></div>
+  </div>`;
+
+  return svg + summary;
+}
+
 function toggleHistory(p){
   const container = document.getElementById('history-'+p.id);
   const btn = document.getElementById('history-toggle-'+p.id);
@@ -872,7 +1067,11 @@ function toggleHistory(p){
 
   container.classList.add('open');
   btn.classList.add('active');
-  container.innerHTML = '<p class="history-loading">Yakında</p>';
+  container.innerHTML = '<p class="history-loading">Fiyat geçmişi yükleniyor…</p>';
+  fetch(`${API_BASE}/api/products/${encodeURIComponent(p.id)}/price-history?days=90`)
+    .then(r => { if(!r.ok) throw new Error('HTTP '+r.status); return r.json(); })
+    .then(rows => { container.innerHTML = renderMiniPriceHistory(rows); })
+    .catch(() => { container.innerHTML = '<p class="history-loading">Fiyat geçmişi şu an yüklenemedi.</p>'; });
 }
 
 const THUMB_SVG = `<svg viewBox="0 0 64 64" class="thumb-svg" aria-hidden="true">
@@ -880,6 +1079,12 @@ const THUMB_SVG = `<svg viewBox="0 0 64 64" class="thumb-svg" aria-hidden="true"
   <rect class="thumb-screen" x="24" y="12.5" width="16" height="33" rx="1.5"/>
   <rect class="thumb-detail" x="27" y="8.5" width="10" height="1.8" rx=".9"/>
   <circle class="thumb-detail" cx="32" cy="50.5" r="1.7"/>
+</svg>`;
+// product-page.js'teki THUMB_SVG_LAPTOP ile aynı — ekran+taban silueti.
+const THUMB_SVG_LAPTOP = `<svg viewBox="0 0 64 64" class="thumb-svg" aria-hidden="true">
+  <rect class="thumb-body" x="12" y="10" width="40" height="28" rx="2.5"/>
+  <rect class="thumb-screen" x="15" y="13" width="34" height="22" rx="1"/>
+  <path class="thumb-detail" d="M6 46h52l4 6H2z"/>
 </svg>`;
 
 const ICON_STORE = `<svg viewBox="0 0 16 16" class="ca-icon" aria-hidden="true"><path d="M8.5 1.5H3a1.5 1.5 0 0 0-1.5 1.5v5.5a1.5 1.5 0 0 0 .44 1.06l6 6a1.5 1.5 0 0 0 2.12 0l4.94-4.94a1.5 1.5 0 0 0 0-2.12l-6-6A1.5 1.5 0 0 0 8.5 1.5Z"/><circle cx="5.25" cy="5.25" r=".9"/></svg>`;
@@ -1028,6 +1233,22 @@ function selectCardVariant(p, storageGb, color){
   }
 }
 
+// Kart üzerindeki rozet kategoriye göre TAMAMEN farklı (telefon: NFC
+// rozeti; laptop: varsa oyun kartı ipucu rozeti). p.category zaten
+// mapApiProduct() içinde damgalanıyor.
+function badgeFor(p){
+  if (p.category === 'laptop') {
+    // Entegre grafik kartlarında "NVIDIA"/"RTX" geçmez — sadece gerçek
+    // ayrık (dedicated) ekran kartı olan laptoplarda rozet gösteriliyor,
+    // telefondaki NFC rozetinin laptop karşılığı gibi düşün.
+    return (p.gpu && /nvidia|rtx|radeon rx/i.test(p.gpu)) ? '<span class="nfc-badge">Oyun Kartı</span>' : '';
+  }
+  return p.nfc ? '<span class="nfc-badge">NFC</span>' : '';
+}
+function thumbFor(p){
+  return p.category === 'laptop' ? THUMB_SVG_LAPTOP : THUMB_SVG;
+}
+
 function cardHTML(p){
   const displayColors = displayColorsFor(p);
   const variants = variantsFor(p);
@@ -1053,12 +1274,11 @@ function cardHTML(p){
       <button class="compare-toggle" id="cmp-${p.id}" title="Karşılaştırmaya ekle" aria-label="Karşılaştırmaya ekle veya çıkar">+</button>
       <button class="favorite-toggle" id="fav-${p.id}" title="Favorilere ekle" aria-label="Favorilere ekle veya çıkar">${ICON_HEART}</button>
       <a class="card-link" href="${API_BASE}/urun/${p.id}/${slugify(p.name)}">
-        <div class="card-thumb">${THUMB_SVG}</div>
+        <div class="card-thumb">${thumbFor(p)}</div>
         <span class="brand-badge">${escHtml(p.brand)}</span>
         <h3>${escHtml(displayModelName(p.name))}</h3>
       </a>
-      <div class="spec-line">${p.ram}GB · ${p.storage}GB · ${p.screen}" · ${(p.battery/1000).toFixed(1)}k mAh</div>
-      ${p.nfc?'<span class="nfc-badge">NFC</span>':''}
+      ${badgeFor(p)}
       ${colorDotsHTML(displayColors)}
       <div class="price-block">
         <p class="muted" style="margin-top:10px">Satış yok</p>
@@ -1073,12 +1293,11 @@ function cardHTML(p){
     <button class="compare-toggle" id="cmp-${p.id}" title="Karşılaştırmaya ekle" aria-label="Karşılaştırmaya ekle veya çıkar">+</button>
     <button class="favorite-toggle" id="fav-${p.id}" title="Favorilere ekle" aria-label="Favorilere ekle veya çıkar">${ICON_HEART}</button>
     <a class="card-link" href="${API_BASE}/urun/${p.id}/${slugify(p.name)}">
-      <div class="card-thumb">${THUMB_SVG}</div>
+      <div class="card-thumb">${thumbFor(p)}</div>
       <span class="brand-badge">${escHtml(p.brand)}</span>
       <h3>${escHtml(displayModelName(p.name))}</h3>
     </a>
-    <div class="spec-line">${p.ram}GB · <span id="spec-storage-${p.id}">${formatGb(hasVariantPicker ? defaultVariant.storageGb : p.storage)}</span> · ${p.screen}" · ${(p.battery/1000).toFixed(1)}k mAh</div>
-    ${p.nfc?'<span class="nfc-badge">NFC</span>':''}
+    ${badgeFor(p)}
     ${hasVariantPicker ? cardVariantPickerHTML(p, variants, defaultVariant) : colorDotsHTML(displayColors)}
     <div class="price-block">
       <div class="price-row">
@@ -1123,11 +1342,21 @@ document.getElementById('favFilterBtn').addEventListener('click', ()=>{
 /* ================= AI ARAMA — artık gerçek backend'e soruyor ================= */
 async function runAISearch(q){
   const aiPickBox = document.getElementById('aiPick');
+  // KRİTİK: "Favorilerim" filtresi açıkken AI arama yapılırsa, alttaki
+  // grid zaten AI sonuçlarını (favori olsun olmasın) gösteriyordu ama
+  // "Favorilerim" butonu hâlâ görsel olarak "aktif" (basılı) kalıyordu —
+  // kullanıcı "neden favorilerim değil de bunları görüyorum" diye
+  // kafası karışabilirdi. categorySwitch'teki AYNI sıfırlama burada da
+  // uygulanıyor.
+  showFavoritesOnly = false;
+  const favBtn = document.getElementById('favFilterBtn');
+  favBtn.classList.remove('active');
+  favBtn.setAttribute('aria-pressed', 'false');
   try {
     const res = await fetch(`${API_BASE}/api/ai-search`, {
       method: 'POST',
       headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ query: q }),
+      body: JSON.stringify({ query: q, category: currentCategory }),
     });
     if(!res.ok) throw new Error('API hatası: ' + res.status);
     const data = await res.json();
@@ -1139,7 +1368,7 @@ async function runAISearch(q){
       // önceden kutu sessizce gizleniyordu, kullanıcı aramanın çalışıp
       // çalışmadığını hiç anlayamıyordu. Şimdi dürüstçe "bulunamadı"
       // mesajı gösteriliyor.
-      document.getElementById('aiPickName').textContent = 'Bu kriterlere uyan bir telefon bulunamadı';
+      document.getElementById('aiPickName').textContent = `Bu kriterlere uyan bir ${CATEGORY_CONFIG[currentCategory].notFoundLabel} bulunamadı`;
       document.getElementById('aiPickReasons').innerHTML = '<li>Farklı bir bütçe veya özellik kombinasyonu dene</li>';
       cta.style.display = 'none';
       aiPickBox.classList.add('show');
@@ -1179,11 +1408,32 @@ document.getElementById('aiBtn').addEventListener('click', ()=>{
 document.getElementById('aiInput').addEventListener('keydown', e=>{
   if(e.key==='Enter') document.getElementById('aiBtn').click();
 });
-document.querySelectorAll('#quickChips .chip').forEach(chip=>{
-  chip.addEventListener('click', ()=>{
-    document.getElementById('aiInput').value = chip.dataset.q;
-    runAISearch(chip.dataset.q);
-  });
+// NOT: hızlı filtre çipi (#quickChips) tıklama dinleyicileri artık burada
+// DEĞİL — applyCategoryUI() her kategori değişiminde çipleri YENİDEN
+// oluşturduğu için dinleyiciyi de doğrudan orada (her oluşturmada) ekliyor.
+
+document.getElementById('categorySwitch').addEventListener('click', e=>{
+  const btn = e.target.closest('button'); if(!btn) return;
+  const cat = btn.dataset.cat;
+  if(cat === currentCategory) return;
+  currentCategory = cat;
+  showFavoritesOnly = false;
+  // Karşılaştırma seçimi de kategoriler arası anlamsız (telefon +
+  // laptop aynı tabloda karşılaştırılamaz) — kategori değişince temizle.
+  compareSet.clear();
+  updateCompareBar();
+  const favBtn = document.getElementById('favFilterBtn');
+  favBtn.classList.remove('active');
+  favBtn.setAttribute('aria-pressed', 'false');
+  applyCategoryUI();
+  loadProducts();
+  // URL'i güncelle ki sayfa yenilense/paylaşılsa bile seçili kategori
+  // korunsun (aynı mekanizma, product-page.js'teki geri linkinin
+  // ?cat=laptop ile buraya döndüğü akışla tutarlı).
+  const url = new URL(location.href);
+  if (cat === 'laptop') url.searchParams.set('cat', 'laptop');
+  else url.searchParams.delete('cat');
+  history.replaceState(null, '', url);
 });
 
 /* ================= KARŞILAŞTIRMA ================= */
@@ -1200,6 +1450,35 @@ document.getElementById('compareGo').addEventListener('click', ()=>{
   // sütunlar da kullanıcının işaretleme sırasıyla eşleşsin diye PHONES'u
   // filtrelemek yerine compareSet'i baz alıyoruz
   const items = [...compareSet].map(id => PHONES.find(p=>p.id===id)).filter(Boolean);
+  // Laptop karşılaştırma tablosu telefonunkinden tamamen ayrı — kamera/
+  // NFC/stylus gibi hiç var olmayan alanları "undefined" göstermek
+  // yerine CPU/GPU/ekran çözünürlüğü/OS gibi gerçek laptop alanlarını
+  // listeliyoruz. compareSet zaten kategori değişiminde temizleniyor
+  // (bkz. categorySwitch dinleyicisi), o yüzden items hep tek kategori.
+  if (currentCategory === 'laptop') {
+    const rows = [
+      ['Fiyat (en uygun)', items.map(p=>{ const m = minOffer(p); return m ? fmt(m.price) : 'Satış yok'; })],
+      ['Marka', items.map(p=>escHtml(p.brand))],
+      ['İşlemci', items.map(p=>escHtml(p.cpu) || '—')],
+      ['Ekran Kartı', items.map(p=>escHtml(p.gpu) || '—')],
+      ['RAM', items.map(p=>p.ram+' GB')],
+      ['Depolama', items.map(p=>formatGb(p.storage) + (p.storageType ? ' ' + escHtml(p.storageType) : ''))],
+      ['Ekran', items.map(p=>p.screen+'"' + (p.screenResolution ? ' (' + escHtml(p.screenResolution) + ')' : ''))],
+      ['Ekran Yenileme Hızı', items.map(p=>p.refreshRate ? p.refreshRate+'Hz' : '—')],
+      ['Ağırlık', items.map(p=>p.weight ? (p.weight/1000).toLocaleString('tr-TR',{maximumFractionDigits:2})+' kg' : '—')],
+      ['Batarya', items.map(p=>p.batteryWh ? p.batteryWh+' Wh' : '—')],
+      ['Dokunmatik Ekran', items.map(p=>p.hasTouchscreen?'Var':'Yok')],
+      ['Aydınlatmalı Klavye', items.map(p=>p.hasBacklitKeyboard?'Var':'Yok')],
+      ['Parmak İzi Okuyucu', items.map(p=>p.hasFingerprint?'Var':'Yok')],
+      ['Webcam', items.map(p=>p.webcamMp ? p.webcamMp+' MP' : '—')],
+      ['İşletim Sistemi', items.map(p=>escHtml(p.os) || '—')],
+    ];
+    const head = `<tr><th>Özellik</th>${items.map(p=>`<th>${escHtml(p.name)}</th>`).join('')}</tr>`;
+    const body = rows.map(r=>`<tr><td>${r[0]}</td>${r[1].map(v=>`<td class="pval">${v}</td>`).join('')}</tr>`).join('');
+    document.getElementById('modalBody').innerHTML = `<table class="compare-table">${head}${body}</table>`;
+    document.getElementById('modalOverlay').classList.remove('hidden');
+    return;
+  }
   const rows = [
     ['Fiyat (en uygun)', items.map(p=>{ const m = minOffer(p); return m ? fmt(m.price) : 'Satış yok'; })],
     ['Marka', items.map(p=>escHtml(p.brand))],
@@ -1243,6 +1522,10 @@ document.getElementById('modalOverlay').addEventListener('click', e=>{
   if(e.target.id==='modalOverlay') e.currentTarget.classList.add('hidden');
 });
 
+// Sayfa ilk yüklendiğinde de (?cat=laptop ile gelinmiş olabilir, bkz.
+// yukarıdaki currentCategory tanımı) hero/çip/marka/sıralama arayüzü
+// doğru kategoriyle eşleşsin diye önce applyCategoryUI(), sonra veri.
+applyCategoryUI();
 loadProducts();
 
 // Birinci taraf, kimliksiz sayfa görüntüleme sayacı — kimlik/IP

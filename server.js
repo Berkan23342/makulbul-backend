@@ -23,6 +23,14 @@ process.on('unhandledRejection', (reason) => {
 // iki ayrı kopyanın zamanla birbirinden sapması riskini ortadan kaldırır.
 const { matchProduct, isSafeHttpUrl, urlMatchesSellerDomain } = require('./match-product');
 const { rankByPower, computeHardwareScore } = require('./ai-rank');
+const { rankLaptopsByPower } = require('./ai-rank-laptop');
+const { scoreCpu, scoreGpu, computeLaptopPowerScore } = require('./chip-tiers-laptop');
+const {
+  parseFieldThreshold, applyNumericThresholds, formatNumericReason,
+  PHONE_NUMERIC_FIELDS, LAPTOP_NUMERIC_FIELDS,
+} = require('./numeric-field-filters');
+const { parsePriceFilter } = require('./price-filter');
+const { foldTurkish } = require('./text-normalize');
 const { renderProductPage, renderNotFoundPage, slugify } = require('./product-page');
 const { createRateLimiter } = require('./rate-limit');
 
@@ -39,12 +47,23 @@ const app = express();
 // aşağıdaki IP bazlı rate limit'ler işe yaramaz.
 app.set('trust proxy', 1);
 
-// Canlıda (NODE_ENV=production) http ile gelen isteği https'e yönlendir.
-// Yerelde (http, proxy yok) bu adım atlanır.
+// Canlıda (NODE_ENV=production) http ve/veya www'lı isteği tek seferde
+// https + www'sız standart adrese yönlendirir. Yerelde (http, proxy yok)
+// bu adım atlanır.
+// NOT: www'lı host (www.makulbul.com) önceden HTTPS'te de doğrudan 200
+// ile aynı içeriği sunuyordu — sayfadaki canonical etiketi www'sız adresi
+// gösterdiği için Google onu ayrı indexlemiyordu (bkz. Search Console'daki
+// "Doğru standart etikete sahip alternatif sayfa" raporu), ama Google'ın
+// crawl bütçesini gereksiz yere ikiye bölüyordu. Artık www'lı host'un
+// kendisi de tek bir 301 ile www'sız + https adrese yönlendiriliyor.
 if (IS_PROD) {
   app.use((req, res, next) => {
-    if (req.secure || req.get('x-forwarded-proto') === 'https') return next();
-    res.redirect(301, `https://${req.get('host')}${req.originalUrl}`);
+    const host = req.get('host') || '';
+    const isHttps = req.secure || req.get('x-forwarded-proto') === 'https';
+    const isWww = host.startsWith('www.');
+    if (isHttps && !isWww) return next();
+    const targetHost = isWww ? host.slice(4) : host;
+    res.redirect(301, `https://${targetHost}${req.originalUrl}`);
   });
 }
 
@@ -146,12 +165,19 @@ async function attachOffers(products) {
 
 // ---------------------------------------------------------------------
 // GET /api/products
-// Query params: brand, maxPrice, nfc=true, sort=price|battery|camera
+// Query params: category=telefon|laptop (varsayılan telefon, eski
+// davranışla geriye dönük uyumlu), brand, maxPrice, nfc=true,
+// sort=price|battery|camera|weight|charging (laptop: cpu-power|ram)
 // ---------------------------------------------------------------------
 app.get('/api/products', async (req, res) => {
   try {
     const { brand, maxPrice, nfc, sort } = req.query;
-    const conditions = [`c.slug = 'telefon'`];
+    // category kesinlikle sadece bu iki sabit değerden biri olabilir
+    // (kullanıcı girdisi doğrudan SQL'e enterpolasyon riski yok) — bu
+    // yüzden $N parametresi yerine düz string olarak gömülüyor, mevcut
+    // $1=ALLOWED_SELLERS numaralandırmasını bozmadan.
+    const category = req.query.category === 'laptop' ? 'laptop' : 'telefon';
+    const conditions = [`c.slug = '${category}'`];
     // ALLOWED_SELLERS her zaman $1 — aşağıdaki best_price alt sorgusu
     // buna referans veriyor, sonraki dinamik filtreler (brand/maxPrice)
     // $2'den başlıyor.
@@ -167,8 +193,14 @@ app.get('/api/products', async (req, res) => {
 
     let sql = `
       SELECT p.id, p.canonical_name, b.name AS brand, p.specs,
+             -- KRİTİK: o.in_stock = true ZORUNLU — aksi halde stokta
+             -- olmayan (satıcıda tükenmiş) bir teklifin fiyatı "en uygun
+             -- fiyat" diye gösterilebilir/tıklanabilir hâle gelirdi.
+             -- Şu an yerel veritabanında TÜM teklifler stokta (in_stock=
+             -- true) olduğu için bu hata görünmüyor ama canlıda bir
+             -- satıcı bir ürünü tükettiği an gerçek bir sorun olurdu.
              (SELECT MIN(o.price) FROM offers o JOIN sellers s2 ON s2.id = o.seller_id
-                WHERE o.product_id = p.id AND s2.name = ANY($1::text[])) AS best_price,
+                WHERE o.product_id = p.id AND s2.name = ANY($1::text[]) AND o.in_stock = true) AS best_price,
              (SELECT MIN(ph.price) FROM price_history ph
                 JOIN offers o ON o.id = ph.offer_id
                 WHERE o.product_id = p.id AND ph.recorded_at >= NOW() - INTERVAL '30 days') AS min_price_30d
@@ -190,6 +222,13 @@ app.get('/api/products', async (req, res) => {
       camera: `(specs->>'main_camera_mp')::int DESC`,
       weight: `COALESCE((specs->>'weight_g')::int, 9999) ASC`,
       charging: `COALESCE((specs->>'wired_charging_watts')::int, 0) DESC`,
+      // Laptop'a özgü sıralamalar — CPU/GPU "güç" sıralaması nüanslı bir
+      // puanlama gerektirdiği için (bkz. chip-tiers-laptop.js) burada SQL
+      // ile yapılmıyor, sadece /api/ai-search'ün "en güçlü laptop" yolunda
+      // hesaplanıyor. Burada sadece ham, tek sütunlu sıralamalar var.
+      ram: `COALESCE((specs->>'ram_gb')::int, 0) DESC`,
+      storage: `COALESCE((specs->>'storage_gb')::int, 0) DESC`,
+      screen: `COALESCE((specs->>'screen_inch')::numeric, 0) DESC`,
     };
     sql += ` ORDER BY ${sortMap[sort] || 'best_price ASC'}`;
 
@@ -208,8 +247,9 @@ app.get('/api/products', async (req, res) => {
 app.get('/api/products/:id', async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT p.id, p.canonical_name, b.name AS brand, p.specs
+      `SELECT p.id, p.canonical_name, b.name AS brand, p.specs, c.slug AS category
        FROM products p JOIN brands b ON b.id = p.brand_id
+       JOIN categories c ON c.id = p.category_id
        WHERE p.id = $1`,
       [req.params.id]
     );
@@ -312,11 +352,522 @@ app.get('/api/stats', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------
+// handleLaptopAiSearch — telefon /api/ai-search'ün (aşağıda) laptop
+// kategorisi için AYRI, kendi kendine yeten karşılığı. BİLEREK telefon
+// kodunun içine karıştırılmıyor/onu değiştirmiyor — telefon tarafı
+// aylarca gerçek sorgularla test edilip inceltildi, oraya en ufak bir
+// dokunuş bile o davranışı bozma riski taşır. Fiyat ayrıştırma ve model-
+// adı eşleştirme gibi kategori-bağımsız mantık BİLEREK burada AYRICA
+// (küçük bir kod tekrarıyla) yazıldı, aynı sebepten.
+//
+// Kriter seçimleri telefon motorundakiyle aynı ruhta ama laptop'a özgü:
+// CPU/GPU (chip-tiers-laptop.js), RAM, depolama, ekran boyutu/çözünürlüğü,
+// ağırlık, pil (Wh), dokunmatik ekran, aydınlatmalı klavye, parmak izi,
+// webcam, işletim sistemi VE — telefonda hiç olmayan, laptopta çok doğal
+// bir arama şekli — KULLANIM AMACI (oyun/öğrenci/ofis/tasarım/
+// programlama gibi profiller, birden fazla alt-kriteri birden aktive eder).
+async function handleLaptopAiSearch(req, res) {
+  try {
+    // KRİTİK: foldTurkish() hem küçük harfe çeviriyor HEM DE Türkçe özel
+    // karakterleri (ı/ş/ğ/ü/ö/ç) ascii karşılığına indirgiyor — böylece
+    // "guclu"/"yuksek ramli"/"ogrenci icin" gibi (gerçek kullanıcıların SIK
+    // yazdığı, Türkçe karaktersiz) sorgular da aşağıdaki TÜM anahtar
+    // kelime kontrolleriyle doğru eşleşiyor. Eskiden sadece toLowerCase()
+    // uygulanıyordu — bu, BÜYÜK harfi düzeltiyordu ama "ü"yü "u"ya
+    // çevirmiyordu, bu yüzden bu tür yazımlar SESSİZCE hiçbir filtreyi
+    // tetiklemeden jenerik "en ucuz" sonucuna düşüyordu.
+    const q = foldTurkish(req.body.query || '');
+
+    // DOĞRUDAN ZIT ANLAMLI kelimeler ("ağır", "az ram", "kısa pil", "eski
+    // model" gibi) — "X olmayan" YERİNE kullanıcı doğrudan zıt kelimeyi
+    // yazdığında da ilgili yumuşak kriter tetiklensin diye. Her anahtar
+    // için: pozitif kelime YOKSA (belirsizlik durumunda pozitif kelime
+    // önceliklidir) VE zıt kelime VARSA true. Aşağıda hem `filters.X`
+    // tetiklemesine hem de (invertedScore() ile) puanın doğru yönde ters
+    // çevrilmesine dahil ediliyor — bkz. effInverted()'in tam açıklaması.
+    const antonymWord = {
+      top: q.includes('zayif') || q.includes('dusuk performans') || q.includes('yavas islemci'),
+      highRam: q.includes('az ram') || q.includes('dusuk ram') || q.includes('kucuk ram'),
+      highStorage: q.includes('az depolama') || q.includes('dusuk depolama') || q.includes('kucuk depolama'),
+      light: q.includes('agir'),
+      longBattery: q.includes('kisa pil') || q.includes('dusuk pil') || q.includes('zayif batarya'),
+      newest: q.includes('eski'),
+    };
+
+    const filters = {
+      maxPrice: null,
+      minPrice: null,
+      brand: null,
+      // Kullanım amacı profilleri — her biri kendi alt-kriterlerini
+      // (aşağıda "profil uygulama" bloğunda) devreye sokuyor.
+      gaming: q.includes('oyun') || q.includes('gaming'),
+      student: q.includes('ogrenci') || q.includes('okul icin') || q.includes('ders icin'),
+      office: q.includes('ofis') || q.includes('is icin') || q.includes('gunluk kullanim') || q.includes('yazi isleri'),
+      creative: q.includes('tasarim') || q.includes('video duzenleme') || q.includes('video montaj') || q.includes('kurgu') || q.includes('render') || q.includes('grafik tasarim'),
+      programming: q.includes('yazilim') || q.includes('programlama') || q.includes('kod yazmak') || q.includes('gelistirici'),
+      // "en iyi" telefon motorundaki gibi kasıtlı olarak YOK (çok belirsiz).
+      // Sadece net güç/performans niyeti bu filtreyi tetikliyor.
+      top: q.includes('guclu') || q.includes('performans') || q.includes('hizli islemci') || q.includes('hizli laptop') || antonymWord.top,
+      light: q.includes('hafif') || q.includes('tasinabilir') || q.includes('kompakt') || antonymWord.light,
+      longBattery: q.includes('uzun pil') || q.includes('pil omru') || q.includes('batarya omru') || q.includes('uzun batarya') || antonymWord.longBattery,
+      highRam: q.includes('yuksek ram') || q.includes('bol ram') || q.includes('cok ram') || q.includes('buyuk ram') || antonymWord.highRam,
+      highStorage: q.includes('genis depolama') || q.includes('bol depolama') || q.includes('cok depolama') || q.includes('yuksek depolama') || antonymWord.highStorage,
+      bigScreen: q.includes('buyuk ekran') || q.includes('genis ekran'),
+      smallScreen: q.includes('kucuk ekran') || q.includes('mini ekran'),
+      highRefreshRate: /120\s*hz|144\s*hz|165\s*hz|180\s*hz|yuksek yenileme|akici ekran/.test(q),
+      touchscreen: q.includes('dokunmatik'),
+      backlitKeyboard: q.includes('aydinlatmali klavye') || q.includes('arkadan aydinlatma'),
+      fingerprint: q.includes('parmak izi'),
+      goodWebcam: q.includes('iyi webcam') || q.includes('kaliteli webcam') || q.includes('yuksek cozunurluklu webcam') || q.includes('goruntulu gorusme'),
+      macos: q.includes('mac os') || q.includes('macos') || q.includes('apple laptop') || q.includes('macbook'),
+      windows: q.includes('windows'),
+      cheap: q.includes('ucuz') || q.includes('ekonomik') || q.includes('butce dostu'),
+      expensive: q.includes('pahali') || q.includes('luks') || q.includes('premium') || q.includes('ust segment'),
+      newest: q.includes('en yeni') || q.includes('yeni cikan') || q.includes('son model') || q.includes('son cikan') || antonymWord.newest,
+    };
+
+    // "X olmayan/olmadan laptop" — telefon motorundaki AYNI Türkçe
+    // olumsuzluk deseni (bkz. oradaki uzun açıklama): olumsuz sıfat-fiil
+    // eki her zaman "-meyen"/"-mayan" ile biter (desteklemeyen,
+    // olmayan, içermeyen...).
+    const negated = /meyen|mayan/.test(q) || q.includes('olmadan');
+    // Bir yumuşak kriterin GERÇEK (efektif) yönü: "X olmayan" (negated)
+    // VE "doğrudan zıt kelime" (antonymWord) ikisi de birer ters çevirme
+    // sinyali — birlikte geldiklerinde ("ağır olmayan" = "agir" YAZILMIŞ +
+    // "olmayan" da var) birbirlerini İPTAL EDER (XOR), çünkü "ağır
+    // OLMAYAN" zaten "hafif" ile AYNI anlama geliyor, ÇİFT ters çevirme
+    // YANLIŞ olurdu. antonymWord tanımlanmamış bir anahtar için (ör.
+    // cheap/expensive/bigScreen/smallScreen — zaten HER İKİ yönün de
+    // kendi kelimesi var) sonuç sadece düz `negated`e eşit kalır, eski
+    // davranış AYNEN korunur.
+    const effInverted = (key) => Boolean(antonymWord[key]) !== negated;
+
+    // Fiyat ayrıştırma — telefon /api/ai-search ile PAYLAŞILAN, tek yerde
+    // (price-filter.js) toplanmış mantık (bkz. o dosyanın başındaki not:
+    // "her türlü sorgu" testinde bulunan 3 gerçek hatanın düzeltmesi —
+    // yön kelimesinin komşu alana sızması, "en az"/"en fazla" prefix
+    // desteğinin eksikliği, birimsiz çıplak sayıların yok sayılması).
+    const qForPrice = q;
+    const priceResult = parsePriceFilter(qForPrice);
+    if (priceResult) {
+      filters.minPrice = priceResult.minPrice;
+      filters.maxPrice = priceResult.maxPrice;
+    }
+
+    // Sayısal eşik ayrıştırma — "8GB'dan yüksek RAM", "512GB üzeri
+    // depolama", "1.5 kg altı laptop", "144Hz üzeri ekran" gibi SAYI +
+    // YÖN belirten sorgu parçaları (bkz. numeric-field-filters.js).
+    // Yön kelimesi olmadan çıplak "16GB" ASLA eşik sayılmaz — aşağıdaki
+    // model-adı varyant eşleştirmesi (exactMatches) çıplak "NN gb/tb"
+    // sayılarını RAM/depolama VARYANT SEÇİMİ için kullanıyor, bu ikisi
+    // çakışmamalı.
+    const numericThresholds = {};
+    for (const field of LAPTOP_NUMERIC_FIELDS) {
+      const t = parseFieldThreshold(q, field);
+      if (t) numericThresholds[field.key] = t;
+    }
+    // refresh_rate_hz: sayı+yön bulunamadıysa ama nitel ifade ("yüksek
+    // yenileme hızı"/"akıcı ekran") varsa eski sabit >=120 davranışı
+    // (negatifse <120) AYNEN korunur.
+    if (!numericThresholds.refresh_rate_hz && filters.highRefreshRate) {
+      numericThresholds.refresh_rate_hz = negated ? { min: null, max: 119 } : { min: 120, max: null };
+    }
+
+    // Kullanım amacı PROFİLLERİ — her biri, o profille en çok ilgili
+    // birkaç temel kriteri (kendi ağırlığıyla) devreye sokuyor. Kullanıcı
+    // AYRICA o kriterlerden birini kendisi de yazmışsa (ör. "öğrenci için
+    // ucuz laptop") çakışma olmuyor, aynı flag zaten true kalıyor.
+    if (filters.student) { filters.cheap = true; filters.light = true; }
+    if (filters.office) { filters.cheap = true; filters.light = true; filters.longBattery = true; }
+    if (filters.creative) { filters.highRam = true; filters.gaming = true; filters.bigScreen = true; }
+    if (filters.programming) { filters.highRam = true; filters.top = true; }
+
+    // Marka tespiti — telefon motorundaki gibi sorguda EN ÖNCE geçen
+    // marka kazanıyor. Lenovo'nun kendi ürün hattı adları (ThinkPad,
+    // Legion, LOQ, Yoga, IdeaPad) da laptop dünyasında insanların marka
+    // yerine söylediği çok yaygın isimler, o yüzden onlar da dahil.
+    const BRAND_KEYWORDS = [
+      { brand: 'Apple', keywords: ['apple', 'macbook'] },
+      { brand: 'ASUS', keywords: ['asus'] },
+      { brand: 'Acer', keywords: ['acer'] },
+      { brand: 'Casper', keywords: ['casper'] },
+      { brand: 'Dell', keywords: ['dell'] },
+      { brand: 'Game Raider', keywords: ['game raider'] },
+      { brand: 'HP', keywords: ['hp '] },
+      { brand: 'Huawei', keywords: ['huawei'] },
+      { brand: 'Lenovo', keywords: ['lenovo', 'thinkpad', 'thinkbook', 'ideapad', 'legion', 'loq', 'yoga slim'] },
+      { brand: 'MONSTER', keywords: ['monster'] },
+      { brand: 'MSI', keywords: ['msi'] },
+      { brand: 'Microsoft', keywords: ['microsoft', 'surface'] },
+    ];
+    let earliestBrandIdx = Infinity;
+    for (const { brand, keywords } of BRAND_KEYWORDS) {
+      for (const kw of keywords) {
+        const idx = q.indexOf(kw);
+        if (idx !== -1 && idx < earliestBrandIdx) {
+          earliestBrandIdx = idx;
+          filters.brand = brand;
+        }
+      }
+    }
+    // macOS/Windows isteği de dolaylı bir marka sinyali: "mac laptop"
+    // dendiğinde brand tespit edilmemiş olabilir ("mac" BRAND_KEYWORDS'te
+    // yok, kelime çok belirsiz/çakışmalı olduğu için) ama macos=true —
+    // bu durumda brand'i AÇIKÇA Apple'a sabitliyoruz (Apple dışında macOS
+    // çalıştıran hiçbir laptop kataloğumuzda yok).
+    if (filters.macos && !filters.brand) filters.brand = 'Apple';
+
+    const conditions = [`c.slug = 'laptop'`];
+    const params = [];
+    if (filters.brand) { params.push(filters.brand); conditions.push(`b.name = $${params.length}`); }
+    if (filters.touchscreen) conditions.push(`(p.specs->>'has_touchscreen')::boolean = ${negated ? 'false' : 'true'}`);
+    if (filters.backlitKeyboard) conditions.push(`(p.specs->>'has_backlit_keyboard')::boolean = ${negated ? 'false' : 'true'}`);
+    if (filters.fingerprint) conditions.push(`(p.specs->>'has_fingerprint')::boolean = ${negated ? 'false' : 'true'}`);
+    // refresh_rate_hz artık SQL'de değil, aşağıda numericThresholds ile
+    // JS post-filter olarak uygulanıyor (bkz. yukarıdaki not) — böylece
+    // sıfır sonuç durumunda fiyat filtresiyle AYNI dürüst geri düşüş
+    // (geniş havuza dönme) davranışı bu alan için de mümkün oluyor.
+    if (filters.windows && !filters.macos) {
+      conditions.push(negated ? `(p.specs->>'os') ILIKE 'windows%'` : `(p.specs->>'os') ILIKE 'windows%'`);
+      // "windows olmayan" nadir ama mantıklı bir istek — FreeDOS/macOS'a düşür.
+      if (negated) { conditions.pop(); conditions.push(`(p.specs->>'os') NOT ILIKE 'windows%'`); }
+    }
+    if (filters.macos) {
+      conditions.push(negated ? `(p.specs->>'os') != 'macOS'` : `(p.specs->>'os') = 'macOS'`);
+    }
+
+    params.push(ALLOWED_SELLERS);
+    const sellersParamIdx = params.length;
+    const { rows: candidates } = await pool.query(
+      `SELECT p.id, p.canonical_name, p.model, b.name AS brand, p.specs,
+              -- KRİTİK: o.in_stock = true ZORUNLU (üçünde de) — aksi
+              -- halde stokta olmayan bir teklif "en uygun fiyat" diye
+              -- gösterilip tıklanabilir hâle gelirdi (bkz. /api/products'daki
+              -- AYNI notun tam açıklaması).
+              (SELECT MIN(o.price) FROM offers o JOIN sellers s2 ON s2.id = o.seller_id
+                 WHERE o.product_id = p.id AND s2.name = ANY($${sellersParamIdx}::text[]) AND o.in_stock = true) AS best_price,
+              (SELECT s.name FROM offers o JOIN sellers s ON s.id = o.seller_id
+                 WHERE o.product_id = p.id AND s.name = ANY($${sellersParamIdx}::text[]) AND o.in_stock = true
+                 ORDER BY o.price ASC LIMIT 1) AS best_seller,
+              (SELECT o.id FROM offers o JOIN sellers s3 ON s3.id = o.seller_id
+                 WHERE o.product_id = p.id AND s3.name = ANY($${sellersParamIdx}::text[]) AND o.in_stock = true
+                 ORDER BY o.price ASC LIMIT 1) AS best_offer_id
+       FROM products p
+       JOIN brands b ON b.id = p.brand_id
+       JOIN categories c ON c.id = p.category_id
+       WHERE ${conditions.join(' AND ')}`,
+      params
+    );
+
+    // Model adıyla ARAMA (ör. "ThinkPad E14 Gen 7", "MacBook Air 13 M4") —
+    // telefon motorundaki AYNI token-eşleştirme fikri, ama eşleştirme
+    // p.canonical_name (marka+model+ÇİP+RAM/depolama hepsi bir arada,
+    // ör. "Lenovo ThinkPad E14 Gen 7 Ultra7 256V 16GB/1TB") yerine
+    // p.model (sade "ThinkPad E14 Gen 7") üzerinden yapılıyor — laptop
+    // canonical_name'leri telefonlardakinden çok daha uzun/detaylı
+    // olduğu için TÜM kelimelerin sorguda geçmesini istemek ("Ultra7",
+    // "256V" gibi teknik ekler dahil) gerçekçi hiçbir kullanıcı
+    // sorgusuyla eşleşmezdi. p.model marka adını içermiyor bile
+    // ("Lenovo" yok) — bu yüzden marka kelimesi burada da ayrıca
+    // çıkarılmıyor, zaten model alanında hiç yer almıyor.
+    function modelTokens(name) {
+      return (name || '')
+        .toLowerCase()
+        .replace(/\+/g, ' plus ')
+        .replace(/\d+\s?(gb|tb)\b/g, ' ')
+        .replace(/[^\wçğıöşü0-9\s]/g, ' ')
+        .split(/\s+/)
+        .filter(t => t.length > 1 || /\d/.test(t));
+    }
+    function tokenPresentInQuery(query, token) {
+      const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`(?<![a-z0-9])${escaped}(?![a-z0-9])`).test(query);
+    }
+    const qForModelMatch = q.replace(/\+/g, ' plus ');
+    // p.model markaya/çipe/RAM'e göre AYRI ürün satırları arasında
+    // PAYLAŞILIYOR (bkz. yukarıdaki not — laptop varyantları ayrı
+    // products satırları, tek ürünün offer varyantları değil). Yani
+    // "ThinkPad E14 Gen 7" gibi bir sorgu birden fazla RAM/depolama/OS
+    // kombinasyonuna AYNI anda tam eşleşebilir. Hepsini topluyoruz;
+    // sorgu belirli bir RAM/depolama sayısı içeriyorsa (ör. "32GB") o
+    // rakamı specs'inde taşıyan varyant kazanır, yoksa en ucuz (satışta
+    // olan) varyant öne çıkarılıyor.
+    let exactMatches = [];
+    let exactMatchScore = 0;
+    for (const c of candidates) {
+      const tokens = modelTokens(c.model);
+      const hasNumber = tokens.some(t => /\d/.test(t));
+      const meetsMinimum = tokens.length >= 2;
+      const allPresent = meetsMinimum && hasNumber && tokens.every(t => tokenPresentInQuery(qForModelMatch, t));
+      if (!allPresent) continue;
+      if (tokens.length > exactMatchScore) {
+        exactMatchScore = tokens.length;
+        exactMatches = [c];
+      } else if (tokens.length === exactMatchScore) {
+        exactMatches.push(c);
+      }
+    }
+    let exactMatch = null;
+    if (exactMatches.length === 1) {
+      exactMatch = exactMatches[0];
+    } else if (exactMatches.length > 1) {
+      // Sorgudaki "NN GB"/"NN TB" sayılarının RAM mi depolama mı olduğu
+      // kelimeyle belirtilmemiş olabilir ("Dell Vostro 3530 32GB" gibi —
+      // "ram" kelimesi hiç geçmiyor). Regex'e sabit bir kelime aramak
+      // yerine, geçen HER "NN gb/tb" sayısını hem RAM hem depolama
+      // boyutunda deniyoruz — hangi varyantların specs'i o sayıyla
+      // GERÇEKTEN eşleşiyorsa onlar kazanıyor (bir laptopun RAM'i asla
+      // 128GB'ın üzerine çıkmadığı, depolaması da asla 64GB'ın altına
+      // inmediği için pratikte iki alan da yanlışlıkla aynı sayıyla
+      // çakışmıyor).
+      const gbNumbers = [...q.matchAll(/(\d+)\s?(gb|tb)\b/g)]
+        .map(m => Number(m[1]) * (m[2] === 'tb' ? 1024 : 1));
+      let narrowed = exactMatches;
+      if (gbNumbers.length) {
+        const byRamOrStorage = exactMatches.filter(c =>
+          gbNumbers.includes(c.specs.ram_gb) || gbNumbers.includes(c.specs.storage_gb)
+        );
+        if (byRamOrStorage.length) narrowed = byRamOrStorage;
+      }
+      const withPrice = narrowed.filter(c => c.best_price !== null);
+      exactMatch = (withPrice.length ? withPrice : narrowed)
+        .sort((a, b) => (Number(a.best_price) || Infinity) - (Number(b.best_price) || Infinity))[0];
+    }
+
+    let pool_ = candidates;
+    if (exactMatch) {
+      pool_ = [exactMatch];
+    } else {
+      pool_ = candidates.filter(c => c.best_price !== null);
+    }
+
+    // Sayısal eşikler (RAM/depolama/pil/ekran/ağırlık/çekirdek/Hz) —
+    // fiyat filtresiyle AYNI "dürüst geri düşüş" mantığı: bir kriter
+    // sıfır sonuç verirse SADECE o kriter atlanır, önceki (başarıyla
+    // uygulanmış) kriterler korunur (bkz. numeric-field-filters.js).
+    const { pool: poolAfterNumeric, unmet: unmetNumeric } = applyNumericThresholds(pool_, numericThresholds);
+    pool_ = poolAfterNumeric;
+
+    let budgetUnmet = false;
+    if (filters.maxPrice && filters.minPrice) {
+      const inRange = pool_.filter(c => c.best_price >= filters.minPrice && c.best_price <= filters.maxPrice);
+      budgetUnmet = inRange.length === 0;
+      pool_ = inRange.length > 0 ? inRange : pool_;
+    } else if (filters.maxPrice) {
+      const underBudget = pool_.filter(c => c.best_price <= filters.maxPrice);
+      budgetUnmet = underBudget.length === 0;
+      pool_ = underBudget.length > 0 ? underBudget : pool_;
+    } else if (filters.minPrice) {
+      const overBudget = pool_.filter(c => c.best_price >= filters.minPrice);
+      budgetUnmet = overBudget.length === 0;
+      pool_ = overBudget.length > 0 ? overBudget : pool_;
+    }
+
+    let topReasoning = null;
+    let topUsedAI = false;
+
+    const normalize = (value, min, max) => (max <= min ? 50 : ((value - min) / (max - min)) * 100);
+    // "gaming" GPU'yu CPU'dan çok daha ağırlıklı sayan KENDİ güç puanını
+    // kullanıyor (computeLaptopPowerScore zaten GPU'yu %55 ağırlıklandırıyor,
+    // ama saf "oyun" isteği için GPU'yu daha da öne çıkarıyoruz).
+    const SOFT_METRICS = {
+      top: c => computeLaptopPowerScore(c.specs),
+      gaming: c => scoreGpu(c.specs.gpu) * 1.6 + scoreCpu(c.specs.cpu) / 400,
+      highRam: c => c.specs.ram_gb || 0,
+      highStorage: c => c.specs.storage_gb || 0,
+      light: c => -(c.specs.weight_g || 99999),
+      longBattery: c => c.specs.battery_wh || 0,
+      bigScreen: c => c.specs.screen_inch || 0,
+      smallScreen: c => -(c.specs.screen_inch || 999),
+      goodWebcam: c => c.specs.webcam_mp || 0,
+      cheap: c => -Number(c.best_price || 0),
+      expensive: c => Number(c.best_price || 0),
+      newest: c => c.specs.release_year || 0,
+    };
+    const WEIGHT = { cheap: 2, expensive: 2, gaming: 2 };
+    const activeSoftKeys = Object.keys(SOFT_METRICS).filter(k => filters[k]);
+    // "X olmayan laptop" — YUMUŞAK (soft) sıralama sinyalleri için de
+    // negasyon desteği. Önceden "negated" SADECE gerçek boolean sert
+    // filtrelerde (nfc/foldable/stylus vb.) işleniyordu — "işlemcisi
+    // GÜÇLÜ OLMAYAN laptop" gibi bir sorgu, negasyon hiç dikkate
+    // alınmadan tam TERSİNİ (katalogdaki EN GÜÇLÜ laptop'u) öneriyordu.
+    // Aşağıdaki her anahtar için normalize edilmiş 0-100 puanı (100-puan)
+    // olarak TERS ÇEVİRİYORUZ — "yüksek=iyi" yerine "düşük=iyi" olur.
+    // gaming/goodWebcam ÇIKARILDI: "gaming" birden fazla anahtarı (GPU+CPU)
+    // birden karıştıran ÖZEL bir puan ve "oyun için güçlü olmayan" gibi bir
+    // istek zaten çelişkili/anlamsız (biri oyun için isterken diğeri
+    // gücü reddediyor) — ters çevirmek yerine dokunulmadan bırakılıyor.
+    const NON_NEGATABLE_SOFT_KEYS = new Set(['gaming']);
+    const invertedScore = (key, raw) => (effInverted(key) && !NON_NEGATABLE_SOFT_KEYS.has(key)) ? (100 - raw) : raw;
+
+    if (activeSoftKeys.length === 0) {
+      pool_.sort((a, b) => a.best_price - b.best_price);
+    } else if (activeSoftKeys.length === 1 && activeSoftKeys[0] === 'top' && !effInverted('top')) {
+      // Tek kriter: ham donanım gücü — nüanslı (ve varsa ücretli AI
+      // destekli) rankLaptopsByPower() yolu. NOT: negated ise bu dala
+      // GİRMİYORUZ (AI'ın kendi sıralamasını "tersine çevirmek" güvenilir
+      // değil) — aşağıdaki genel ağırlıklı puan yoluna düşüyor, orada
+      // 'top' SOFT_METRICS'in bir parçası olduğu için normal ters çevirme
+      // mekanizması (invertedScore) otomatik uygulanıyor.
+      const { ranking, reasoning, usedAI } = await rankLaptopsByPower(pool_);
+      const orderMap = new Map(ranking.map((id, i) => [id, i]));
+      pool_.sort((a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999));
+      topReasoning = reasoning;
+      topUsedAI = usedAI;
+    } else {
+      const ranges = {};
+      for (const key of activeSoftKeys) {
+        const values = pool_.map(SOFT_METRICS[key]);
+        ranges[key] = { min: Math.min(...values), max: Math.max(...values) };
+      }
+      const scoreOf = c => {
+        let weightedSum = 0, totalWeight = 0;
+        for (const key of activeSoftKeys) {
+          const w = WEIGHT[key] || 1;
+          const norm = invertedScore(key, normalize(SOFT_METRICS[key](c), ranges[key].min, ranges[key].max));
+          weightedSum += norm * w;
+          totalWeight += w;
+        }
+        return weightedSum / totalWeight;
+      };
+      pool_.sort((a, b) => scoreOf(b) - scoreOf(a));
+      if (filters.top) {
+        topReasoning = effInverted('top')
+          ? 'Donanım gücü tersine çevrilerek (en düşük performanslı öncelikli) diğer özelliklerle birlikte değerlendirildi'
+          : 'Donanım gücü, istediğin diğer özelliklerle birlikte değerlendirildi';
+      }
+    }
+
+    const pick = pool_[0] || null;
+    if (pick && pick.best_price === null) {
+      return res.json({
+        pick: { id: pick.id, canonical_name: pick.canonical_name, best_price: null, best_seller: null, best_offer_id: null },
+        reasons: ['Aradığın model bulundu', 'Şu an Hepsiburada, Trendyol veya Amazon TR üzerinde satışta değil'],
+        candidates: [],
+      });
+    }
+    const reasons = [];
+    if (pick) {
+      const bestPriceNum = Number(pick.best_price);
+      if (exactMatch) reasons.push('Aradığın model bulundu');
+      if (filters.maxPrice && filters.minPrice) {
+        const rangeLabel = `${filters.minPrice.toLocaleString('tr-TR')}-${filters.maxPrice.toLocaleString('tr-TR')} TL`;
+        reasons.push(budgetUnmet
+          ? `Bu aralıkta (${rangeLabel}) uygun laptop bulunamadı, en yakın seçenek gösteriliyor: ${bestPriceNum.toLocaleString('tr-TR')} TL`
+          : `Belirtilen aralıkta (${rangeLabel}): ${bestPriceNum.toLocaleString('tr-TR')} TL`);
+      } else if (filters.maxPrice) {
+        reasons.push(budgetUnmet
+          ? `Bu bütçede (${filters.maxPrice.toLocaleString('tr-TR')} TL altı) uygun laptop bulunamadı, en uygun fiyatlı seçenek gösteriliyor: ${bestPriceNum.toLocaleString('tr-TR')} TL`
+          : `Bütçenin (${filters.maxPrice.toLocaleString('tr-TR')} TL) altında: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
+      } else if (filters.minPrice) {
+        reasons.push(budgetUnmet
+          ? `Bu bütçede (${filters.minPrice.toLocaleString('tr-TR')} TL üzeri) uygun laptop bulunamadı, en yakın seçenek gösteriliyor: ${bestPriceNum.toLocaleString('tr-TR')} TL`
+          : `Belirtilen (${filters.minPrice.toLocaleString('tr-TR')} TL) üzerinde: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
+      }
+      // Sayısal eşik kriterleri (RAM/depolama/pil/ekran/ağırlık/çekirdek)
+      // — refresh_rate_hz burada AYRI ele alınıyor (aşağıda, negated'e
+      // duyarlı daha doğal bir metinle), o yüzden burada atlanıyor.
+      for (const [fieldKey, threshold] of Object.entries(numericThresholds)) {
+        if (fieldKey === 'refresh_rate_hz') continue;
+        const actualValue = pick.specs[fieldKey];
+        const wasUnmet = unmetNumeric.some(u => u.fieldKey === fieldKey);
+        if (actualValue == null && !wasUnmet) continue;
+        reasons.push(formatNumericReason(fieldKey, threshold, actualValue, wasUnmet));
+      }
+      if (filters.gaming && pick.specs.gpu) reasons.push(`Oyun için güçlü ekran kartı: ${pick.specs.gpu}`);
+      if (filters.top && !filters.gaming) {
+        const label = topUsedAI ? 'Yapay zeka analizi' : 'Donanım analizi';
+        reasons.push(topReasoning
+          ? `${label}: ${topReasoning}`
+          : (effInverted('top') ? `En düşük donanım seviyesi: ${pick.specs.cpu}, ${pick.specs.gpu}` : `En yüksek donanım seviyesi: ${pick.specs.cpu}, ${pick.specs.gpu}`));
+      }
+      if (filters.student) reasons.push('Öğrenci kullanımı için uygun fiyatlı ve hafif bir seçenek');
+      if (filters.office) reasons.push('Günlük ofis işleri için hafif, uzun pilli bir seçenek');
+      if (filters.creative && pick.specs.gpu) reasons.push(`Tasarım/video düzenleme için güçlü donanım: ${pick.specs.ram_gb}GB RAM, ${pick.specs.gpu}`);
+      if (filters.programming && pick.specs.ram_gb) reasons.push(`Yazılım geliştirme için yeterli RAM ve işlemci: ${pick.specs.ram_gb}GB RAM, ${pick.specs.cpu}`);
+      // NOT: her satır !numericThresholds.<alan> ile korunuyor — sayısal eşik
+      // (ör. "8GB'dan yüksek RAM'li") zaten kendi (daha kesin) reasons
+      // satırını yukarıdaki numericThresholds döngüsünde eklediyse, bu eski
+      // "yumuşak" satır AYNI bilgiyi tekrar etmesin ("Yüksek RAM: 8GB" +
+      // "En az 8GB RAM: 8GB" gibi kafa karıştırıcı ikili mesaj olmasın).
+      // NOT: "X olmayan" (negated) her satırda TERS metne düşüyor — skor
+      // zaten yukarıda invertedScore() ile ters çevrildiği için burada
+      // sadece DOĞRU metni göstermek kalıyor (ör. "hafif OLMAYAN laptop"
+      // seçilince "en hafif seçeneklerden" demek YANLIŞ/çelişkili olurdu).
+      if (filters.highRam && !numericThresholds.ram_gb && pick.specs.ram_gb) reasons.push(effInverted('highRam') ? `Düşük RAM: ${pick.specs.ram_gb}GB` : `Yüksek RAM: ${pick.specs.ram_gb}GB`);
+      if (filters.highStorage && !numericThresholds.storage_gb && pick.specs.storage_gb) reasons.push(effInverted('highStorage') ? `Kompakt depolama: ${formatGbReason(pick.specs.storage_gb)}` : `Geniş depolama: ${formatGbReason(pick.specs.storage_gb)}`);
+      if (filters.light && !numericThresholds.weight_g && pick.specs.weight_g) reasons.push(effInverted('light')
+        ? `Bu segmentteki en ağır seçeneklerden: ${(pick.specs.weight_g / 1000).toLocaleString('tr-TR', { maximumFractionDigits: 2 })} kg`
+        : `Bu segmentteki en hafif seçeneklerden: ${(pick.specs.weight_g / 1000).toLocaleString('tr-TR', { maximumFractionDigits: 2 })} kg`);
+      if (filters.longBattery && !numericThresholds.battery_wh && pick.specs.battery_wh) reasons.push(effInverted('longBattery') ? `Daha düşük batarya kapasitesi: ${pick.specs.battery_wh} Wh` : `Yüksek batarya kapasitesi: ${pick.specs.battery_wh} Wh`);
+      if (filters.bigScreen && !numericThresholds.screen_inch && pick.specs.screen_inch) reasons.push(negated ? `Kompakt, taşınabilir ekran: ${pick.specs.screen_inch}"` : `Bu segmentteki en büyük ekranlardan: ${pick.specs.screen_inch}"`);
+      if (filters.smallScreen && !numericThresholds.screen_inch && pick.specs.screen_inch) reasons.push(negated ? `Bu segmentteki en büyük ekranlardan: ${pick.specs.screen_inch}"` : `Kompakt, taşınabilir ekran: ${pick.specs.screen_inch}"`);
+      // KRİTİK DÜZELTME: bu satır önceden SADECE dilbilgisel "olmayan"
+      // negasyonuna (negated) bakıyordu — ama artık numericThresholds
+      // AÇIK sayı+yön sorgularından da ("120Hz ALTI ekranlı telefon")
+      // gelebiliyor, ve bu durumda negated=false olsa bile eşik aslında
+      // bir ÜST SINIR (max, "standart/düşük Hz"). Doğru sinyal her zaman
+      // eşiğin KENDİSİ (max mı min mi) — negated'e değil ona bakılmalı.
+      if (numericThresholds.refresh_rate_hz && numericThresholds.refresh_rate_hz.max != null && pick.specs.refresh_rate_hz != null) reasons.push(`Standart yenileme hızlı ekran: ${pick.specs.refresh_rate_hz}Hz`);
+      else if (numericThresholds.refresh_rate_hz && pick.specs.refresh_rate_hz) reasons.push(`Yüksek yenileme hızlı, akıcı ekran: ${pick.specs.refresh_rate_hz}Hz`);
+      if (filters.touchscreen && negated) reasons.push('Dokunmatik ekran değil (istediğin gibi)');
+      else if (filters.touchscreen && pick.specs.has_touchscreen) reasons.push('Dokunmatik ekran desteği var');
+      if (filters.backlitKeyboard && negated) reasons.push('Aydınlatmalı klavyesi yok (istediğin gibi)');
+      else if (filters.backlitKeyboard && pick.specs.has_backlit_keyboard) reasons.push('Aydınlatmalı klavyeye sahip');
+      if (filters.fingerprint && negated) reasons.push('Parmak izi okuyucusu yok (istediğin gibi)');
+      else if (filters.fingerprint && pick.specs.has_fingerprint) reasons.push('Parmak izi okuyucusuyla hızlı kilit açma');
+      if (filters.goodWebcam && pick.specs.webcam_mp) reasons.push(negated ? `Düşük çözünürlüklü webcam: ${pick.specs.webcam_mp}MP` : `Yüksek çözünürlüklü webcam: ${pick.specs.webcam_mp}MP`);
+      if (filters.macos) reasons.push('macOS çalıştırıyor');
+      if (filters.windows && !filters.macos && pick.specs.os) reasons.push(`İşletim sistemi: ${pick.specs.os}`);
+      // cheap/expensive: "ucuz OLMAYAN" ~ "pahalı" ve tam tersi — skoru
+      // ters çevrildiği için (invertedScore) burada da karşı metni gösteriyoruz.
+      if (filters.cheap && !filters.maxPrice && !filters.minPrice && !filters.student && !filters.office) reasons.push(negated ? `Üst segment bir seçenek: ${bestPriceNum.toLocaleString('tr-TR')} TL` : `Uygun fiyatlı bir seçenek: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
+      if (filters.expensive) reasons.push(negated ? `Uygun fiyatlı bir seçenek: ${bestPriceNum.toLocaleString('tr-TR')} TL` : `Üst segment bir seçenek: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
+      if (filters.newest && pick.specs.release_year) reasons.push(effInverted('newest') ? `Daha eski, köklü bir modelden: ${pick.specs.release_year}` : `En yeni modellerden: ${pick.specs.release_year}`);
+      if (reasons.length === 0) reasons.push(`En uygun fiyatlı seçenek: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
+      reasons.push(`En uygun fiyat ${pick.best_seller} üzerinden`);
+    }
+
+    res.json({ pick, reasons, candidates: pool_.slice(0, 12) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Arama yapılamadı' });
+  }
+}
+function formatGbReason(gb) {
+  const n = Number(gb);
+  return (n >= 1024 && n % 1024 === 0) ? `${n / 1024}TB` : `${n}GB`;
+}
+
+// ---------------------------------------------------------------------
 // POST /api/ai-search — basit kural tabanlı öneri (body: { query: "..." })
 // ---------------------------------------------------------------------
 app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
+  // Laptop kategorisi tamamen AYRI bir yolda ele alınıyor (bkz. yukarıdaki
+  // handleLaptopAiSearch) — aşağıdaki telefon mantığına HİÇ girmiyor.
+  if (req.body.category === 'laptop') return handleLaptopAiSearch(req, res);
   try {
-    const q = (req.body.query || '').toLowerCase();
+    // KRİTİK: foldTurkish() hem küçük harfe çeviriyor HEM DE Türkçe özel
+    // karakterleri (ı/ş/ğ/ü/ö/ç) ascii karşılığına indirgiyor — böylece
+    // "guclu"/"yuksek ramli"/"ogrenci icin" gibi (gerçek kullanıcıların SIK
+    // yazdığı, Türkçe karaktersiz) sorgular da aşağıdaki TÜM anahtar
+    // kelime kontrolleriyle doğru eşleşiyor. Eskiden sadece toLowerCase()
+    // uygulanıyordu — bu, BÜYÜK harfi düzeltiyordu ama "ü"yü "u"ya
+    // çevirmiyordu, bu yüzden bu tür yazımlar SESSİZCE hiçbir filtreyi
+    // tetiklemeden jenerik "en ucuz" sonucuna düşüyordu.
+    const q = foldTurkish(req.body.query || '');
+
+    // DOĞRUDAN ZIT ANLAMLI kelimeler — bkz. laptop handler'ındaki (yukarı,
+    // handleLaptopAiSearch) AYNI mekanizmanın tam açıklaması.
+    const antonymWord = {
+      top: q.includes('zayif') || q.includes('dusuk performans') || q.includes('yavas islemci'),
+      light: q.includes('agir'),
+      battery: q.includes('az pil') || q.includes('dusuk pil') || q.includes('kisa pil') || q.includes('az batarya'),
+      fastCharge: q.includes('yavas') && q.includes('sarj'),
+      brightScreen: q.includes('mat ekran') || q.includes('dusuk parlaklik') || q.includes('kisik ekran'),
+      highRam: q.includes('az ram') || q.includes('dusuk ram') || q.includes('kucuk ram'),
+      newest: q.includes('eski'),
+    };
 
     const filters = {
       maxPrice: null,
@@ -335,29 +886,33 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
       // daha ucuzdu. Düğme sorgusu kamera KALİTESİYLE değil donanımsal
       // bir anahtarla ilgili, ikisi karıştırılmamalı.
       camera: q.includes('kamera')
-        && !q.includes('ön kamera') && !q.includes('selfie')
-        && !q.includes('telefoto') && !q.includes('zoom') && !q.includes('uzak çekim')
-        && !q.includes('düğme') && !q.includes('kumanda'),
-      battery: q.includes('pil') || q.includes('batarya'),
+        && !q.includes('on kamera') && !q.includes('selfie')
+        && !q.includes('telefoto') && !q.includes('zoom') && !q.includes('uzak cekim')
+        && !q.includes('dugme') && !q.includes('kumanda'),
+      battery: q.includes('pil') || q.includes('batarya') || antonymWord.battery,
       // "en iyi" kasıtlı olarak burada YOK — çok belirsiz ("en iyi kamera",
       // "en iyi telefon" gibi her şeyi kapsayabilir) ve eskiden her sorguda
       // ham donanım gücü sıralamasını tetikleyip diğer belirtilen kriterleri
       // (kamera, pil vb.) es geçiyordu. Artık sadece net güç/performans
       // niyeti (güçlü/performans/oyun) bu filtreyi tetikliyor.
-      top: q.includes('güçlü') || q.includes('performans') || q.includes('oyun'),
-      light: q.includes('hafif') || q.includes('kompakt'),
-      durable: q.includes('dayanıklı') || q.includes('su geçirmez') || q.includes('sağlam'),
-      fastCharge: q.includes('hızlı şarj') || q.includes('çabuk şarj'),
-      wirelessCharge: q.includes('kablosuz şarj'),
-      zoom: q.includes('zoom') || q.includes('telefoto') || q.includes('uzak çekim'),
-      selfie: q.includes('selfie') || q.includes('ön kamera'),
-      brightScreen: q.includes('parlak ekran') || q.includes('güneş') || q.includes('gün ışığı'),
+      top: q.includes('guclu') || q.includes('performans') || q.includes('oyun') || antonymWord.top,
+      light: q.includes('hafif') || q.includes('kompakt') || antonymWord.light,
+      durable: q.includes('dayanikli') || q.includes('su gecirmez') || q.includes('saglam'),
+      // KELİME SIRASINDAN BAĞIMSIZ: "hızlı şarj" YERİNE "şarjı hızlı"
+      // (Türkçe'de son derece doğal, nesne-önce sıralama) de tetiklemeli —
+      // sabit "hizli sarj" alt-dizesi SADECE bu tek sıralamayı yakalıyordu.
+      // headphoneJack'teki AYNI "iki kelime de var mı" desenini kullanıyoruz.
+      fastCharge: (q.includes('hizli') && q.includes('sarj')) || (q.includes('cabuk') && q.includes('sarj')) || antonymWord.fastCharge,
+      wirelessCharge: q.includes('kablosuz sarj'),
+      zoom: q.includes('zoom') || q.includes('telefoto') || q.includes('uzak cekim'),
+      selfie: q.includes('selfie') || q.includes('on kamera'),
+      brightScreen: q.includes('parlak ekran') || q.includes('gunes') || q.includes('gun isigi') || antonymWord.brightScreen,
       // "yenileme hızı"/"Hz" verisi 40 üründe de vardı ama hiçbir filtre
       // veya arayüz alanı bunu kullanmıyordu — toplanan ama hiç
       // sorgulanamayan "ölü veri" idi. Artık gerçek bir sert filtre:
       // katalogda hem 60Hz (çoğu temel iPhone) hem 120/144Hz ürün olduğu
       // için bu ayrım anlamlı sonuç üretebiliyor.
-      highRefreshRate: /120\s*hz|144\s*hz|yüksek yenileme|akıcı ekran/.test(q),
+      highRefreshRate: /120\s*hz|144\s*hz|yuksek yenileme|akici ekran/.test(q),
       // Bunlar "hangisi daha iyi" değil "var mı yok mu" soruları — NFC gibi
       // net bir gereksinim, o yüzden soft puanlama yerine SQL'de sert filtre
       // olarak uygulanıyor (aşağıda conditions.push).
@@ -377,8 +932,8 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
       // küme çıkarıyordu (o iki özelliğe birlikte sahip TEK ürün yok),
       // sonuç sessizce "SONUÇ YOK" oluyordu. "kamera kumanda-" öbeği
       // varsa bu sadece kamera düğmesi demektir, IR kumandasıyla alakasız.
-      irBlaster: (q.includes('kumanda') && !q.includes('kamera kumanda')) || q.includes('kızılötesi') || q.includes('ir blaster'),
-      faceUnlock: q.includes('yüz tanıma') || q.includes('face id'),
+      irBlaster: (q.includes('kumanda') && !q.includes('kamera kumanda')) || q.includes('kizilotesi') || q.includes('ir blaster'),
+      faceUnlock: q.includes('yuz tanima') || q.includes('face id'),
       physicalSim: q.includes('fiziksel sim') || q.includes('fiziksel kart'),
       // Sony Xperia'nın eklenmesiyle gelen üç yeni özellik: kulaklık
       // girişi ve hafıza kartı deposu artık katalogda GERÇEKTEN ayrım
@@ -398,9 +953,9 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
       // düşmeden sessizce en ucuz telefonu (kamerayla/girişle hiç ilgisi
       // olmayan Redmi Note 15 5G) öneriyordu. Kök kelimeyi (sondaki
       // iyelik/sıfat ekini olmadan) aramak her iki çekimi de yakalıyor.
-      headphoneJack: (q.includes('kulaklık') && q.includes('giriş')) || q.includes('3.5mm') || q.includes('3,5mm') || q.includes('aux'),
-      expandableStorage: q.includes('hafıza kart') || q.includes('microsd') || q.includes('sd kart'),
-      cameraButton: q.includes('kamera düğme') || q.includes('deklanşör') || q.includes('kamera kumanda') || q.includes('çekim düğme'),
+      headphoneJack: (q.includes('kulaklik') && q.includes('giris')) || q.includes('3.5mm') || q.includes('3,5mm') || q.includes('aux'),
+      expandableStorage: q.includes('hafiza kart') || q.includes('microsd') || q.includes('sd kart'),
+      cameraButton: q.includes('kamera dugme') || q.includes('deklansor') || q.includes('kamera kumanda') || q.includes('cekim dugme'),
       // ESKİDEN "ucuz"/"pahalı" hiç tanınmıyordu — sadece BAŞKA hiçbir
       // kriter yokken varsayılan "ucuza göre sırala" davranışıyla ucuz
       // isteği tesadüfen karşılanıyordu. Ama "hızlı şarj olan UCUZ telefon"
@@ -409,15 +964,15 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
       // için de aynı şekilde tersi oluyordu. Artık ikisi de gerçek birer
       // yumuşak kriter, diğerleriyle birlikte harmanlanıyor.
       cheap: q.includes('ucuz') || q.includes('ekonomik'),
-      expensive: q.includes('pahalı') || q.includes('lüks') || q.includes('premium') || q.includes('üst segment'),
+      expensive: q.includes('pahali') || q.includes('luks') || q.includes('premium') || q.includes('ust segment'),
       // Ekran boyutu, RAM ve çıkış yılı 48 üründe de vardı ama hiçbir
       // sorgu bunları kullanmıyordu — "büyük ekranlı"/"yüksek ram'li"/
       // "en yeni" gibi son derece doğal istekler hiç karşılık bulmadan
       // sessizce en ucuz telefona düşüyordu.
-      bigScreen: q.includes('büyük ekran') || q.includes('geniş ekran'),
-      smallScreen: q.includes('küçük ekran') || q.includes('mini ekran'),
-      highRam: q.includes('yüksek ram') || q.includes('bol ram') || q.includes('çok ram') || q.includes('büyük ram'),
-      newest: q.includes('en yeni') || q.includes('yeni çıkan') || q.includes('son model') || q.includes('son çıkan'),
+      bigScreen: q.includes('buyuk ekran') || q.includes('genis ekran'),
+      smallScreen: q.includes('kucuk ekran') || q.includes('mini ekran'),
+      highRam: q.includes('yuksek ram') || q.includes('bol ram') || q.includes('cok ram') || q.includes('buyuk ram') || antonymWord.highRam,
+      newest: q.includes('en yeni') || q.includes('yeni cikan') || q.includes('son model') || q.includes('son cikan') || antonymWord.newest,
     };
     // Renk sorgusu: query'de geçen ilk renk kökünü (ek almadan, "mavi"
     // hem "Mavi Titanyum" hem "Buzul Mavisi" içinde alt-dize olarak
@@ -425,7 +980,28 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
     // "mavi telefon" dendiğinde mavi seçeneği OLMAYAN bir telefon
     // önerilmemeli.
     const COLOR_KEYWORDS = ['siyah', 'beyaz', 'mavi', 'kırmızı', 'yeşil', 'sarı', 'mor', 'pembe', 'gri', 'gümüş', 'altın', 'turuncu', 'lacivert', 'turkuaz', 'lavanta', 'bej', 'titanyum'];
-    const colorMatch = COLOR_KEYWORDS.find(c => q.includes(c));
+    // KRİTİK DÜZELTME: naif `q.includes(c)` "altın" (renk) ile "altında"/
+    // "altına"/"altından" (fiyat/eşik yön kelimesi "alt" kökünün hâl ekli
+    // biçimleri) arasındaki YAZIM ÇAKIŞMASINI (harfler tesadüfen üst üste
+    // biniyor: a-l-t-ı-n-d-a) fark etmiyordu — "25000 TL'NİN ALTINDA
+    // telefon" gibi son derece yaygın bir bütçe sorgusu, SESSİZCE "altın
+    // (gold) renkli telefon" sert filtresini tetikleyip sonucu sadece
+    // birkaç altın renkli iPhone'a daraltıyordu, sorgudaki gerçek bütçe/
+    // kriterler bir kenara atılıyordu. tokenPresentInQuery() (aşağıda
+    // tanımlı, model-adı eşleştirmesiyle aynı fonksiyon — JS'te function
+    // deklarasyonları hoisted olduğu için burada da kullanılabiliyor) ile
+    // kelime sınırı kontrolü ekleniyor: "altın" hâlâ "altın telefon"/
+    // "altın renkli"/"altın rengi" gibi meşru kullanımlarda eşleşiyor,
+    // ama "altında/altına/altından" gibi bitişik son-ek biçimlerinde
+    // ARTIK eşleşmiyor (bkz. az yukarıdaki fonksiyonun kendi yorumu).
+    // NOT: burada COLOR_KEYWORDS'ün KENDİSİ foldTurkish'ten GEÇİRİLMİYOR —
+    // "colorMatch" daha sonra SQL'de gerçek DB renk değerleriyle (ör.
+    // "Kırmızı", ı/ş harfli) eşleştirilmek üzere ORİJİNAL Türkçe haliyle
+    // kullanılıyor. Sadece KARŞILAŞTIRMA anında (q zaten katlanmış
+    // olduğu için) `c`yi de foldTurkish(c) ile katlıyoruz — böylece
+    // "kirmizi telefon" (Türkçe karaktersiz) da doğru tespit ediliyor,
+    // ama SQL'e giden değer hâlâ doğru "kırmızı" oluyor.
+    const colorMatch = COLOR_KEYWORDS.find(c => tokenPresentInQuery(q, foldTurkish(c)));
     // "X olmayan/olmadan telefon" — kullanıcı özelliğin TERSİNİ istiyor.
     // Önceden bu hiç fark edilmiyordu: "kablosuz şarjı olmayan telefon"
     // sorgusu "kablosuz şarj" alt dizesi hâlâ eşleştiği için normal
@@ -446,6 +1022,12 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
     // kökünden bağımsız olarak eki (meyen/mayan) aramak bu sınıftaki
     // TÜM olumsuz ifadeleri tek seferde yakalıyor.
     const negated = /meyen|mayan/.test(q) || q.includes('olmadan');
+    // Bir yumuşak kriterin GERÇEK (efektif) yönü — bkz. laptop handler'ındaki
+    // (yukarı, handleLaptopAiSearch) AYNI mekanizmanın tam açıklaması: "X
+    // olmayan" (negated) ile "doğrudan zıt kelime" (antonymWord) birlikte
+    // geldiğinde (ör. "ağır olmayan" = "agir" + "olmayan") birbirini İPTAL
+    // EDER (XOR), çünkü ikisi zaten AYNI anlama geliyor.
+    const effInverted = (key) => Boolean(antonymWord[key]) !== negated;
     // "25 bin", "25bin", "30k", "25.000 TL", "25,000TL", "100.000 tl" gibi
     // biçimlerin hepsini yakalar. Sayı grubu ondalık/binlik ayraçlı da
     // olabilir (\d{1,3}(?:[.,]\d{3})*) — bu durumda "bin"/"k" ile TEKRAR
@@ -473,51 +1055,31 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
     // DOĞRU yakalıyor hem de "25.000"/"100.000" gibi noktalı/virgüllü
     // binlik ayraçlı biçimleri de bozmadan destekliyor.
     const qForPrice = q.replace(/\b[248]k\b/g, '');
-    // Bir "N bin/k/TL" eşleşmesini gerçek TL değerine çevirir — hem tek
-    // fiyat hem de aralık ("X ile Y arası") ayrıştırması bunu paylaşıyor.
-    function parseAmount(numGroup, unit) {
-      const hasThousandsSep = /[.,]\d{3}/.test(numGroup);
-      const rawNum = numGroup.replace(/[.,]/g, '');
-      let value = parseInt(rawNum, 10);
-      if ((unit === 'bin' || unit === 'k') && !hasThousandsSep) value *= 1000;
-      return value;
+    // Fiyat ayrıştırma — laptop handler'ıyla PAYLAŞILAN, tek yerde
+    // (price-filter.js) toplanmış mantık. Bkz. o dosyanın başındaki not:
+    // "her türlü sorgu" testinde bulunan 3 gerçek hatanın düzeltmesi —
+    // yön kelimesinin komşu alana sızması, "en az"/"en fazla" prefix
+    // desteğinin eksikliği, birimsiz çıplak sayıların yok sayılması.
+    const priceResult = parsePriceFilter(qForPrice);
+    if (priceResult) {
+      filters.minPrice = priceResult.minPrice;
+      filters.maxPrice = priceResult.maxPrice;
     }
 
-    // ESKİDEN "50000 ile 80000 arası telefon" gibi ARALIK sorguları HİÇ
-    // tanınmıyordu (tek sayı yakalayan regex boşa çıkıyordu çünkü aralarda
-    // "tl"/"bin" geçmeyebiliyordu) — sonuç, bütçe tamamen yok sayılıp
-    // katalogdaki en ucuz telefonun (17.949 TL) önerilmesiydi, istenen
-    // 50-80 bin aralığıyla hiç ilgisi olmadan. Artık "X (ile/ila/-) Y
-    // aras-" kalıbı önce deneniyor; eşleşirse hem minPrice hem maxPrice
-    // birlikte set ediliyor.
-    const rangeMatch = qForPrice.match(
-      /(\d+(?:[.,]\d{3})*)\s*(bin|k)?\s*(?:ile|ila|-)\s*(\d+(?:[.,]\d{3})*)\s*(bin|k|tl)?\s*aras/
-    );
-    if (rangeMatch) {
-      const unitA = rangeMatch[2] || rangeMatch[4];
-      const unitB = rangeMatch[4] || rangeMatch[2];
-      const a = parseAmount(rangeMatch[1], unitA);
-      const b = parseAmount(rangeMatch[3], unitB);
-      filters.minPrice = Math.min(a, b);
-      filters.maxPrice = Math.max(a, b);
-    } else {
-      const priceMatch = qForPrice.match(/(\d+(?:[.,]\d{3})*)\s*(bin|k|tl)/);
-      if (priceMatch) {
-        const value = parseAmount(priceMatch[1], priceMatch[2]);
-
-        // Sayının yönünü ("altında" mı "üzerinde" mi) sorgu metninden anla;
-        // yön belirtilmemişse varsayılan olarak bütçe üst sınırı (altında) say.
-        const overWords = ['üzerinde', 'üzeri', 'üstünde', 'üstü', 'fazla', 'yukarı', 'daha pahalı'];
-        const underWords = ['altında', 'altı', 'aşağı', 'daha ucuz'];
-        const isOver = overWords.some(w => q.includes(w));
-        const isUnder = underWords.some(w => q.includes(w));
-
-        if (isOver && !isUnder) {
-          filters.minPrice = value;
-        } else {
-          filters.maxPrice = value;
-        }
-      }
+    // Sayısal eşik ayrıştırma — "8GB'dan yüksek RAM", "256GB üzeri
+    // depolama", "6000 mAh üzeri pil", "6.7 inçten büyük ekran", "150
+    // gramdan hafif" gibi SAYI + YÖN belirten sorgu parçaları (bkz.
+    // numeric-field-filters.js — laptop motorundaki AYNI mekanizma).
+    const numericThresholds = {};
+    for (const field of PHONE_NUMERIC_FIELDS) {
+      const t = parseFieldThreshold(q, field);
+      if (t) numericThresholds[field.key] = t;
+    }
+    // refresh_rate_hz: sayı+yön bulunamadıysa ama nitel ifade ("yüksek
+    // yenileme hızı"/"akıcı ekran") varsa eski sabit >=120 davranışı
+    // (negatifse <120) AYNEN korunur.
+    if (!numericThresholds.refresh_rate_hz && filters.highRefreshRate) {
+      numericThresholds.refresh_rate_hz = negated ? { min: null, max: 119 } : { min: 120, max: null };
     }
 
     // Marka tespiti: sorguda birden fazla marka adı geçerse (nadir ama
@@ -574,7 +1136,9 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
         ? `(p.specs->>'sim_type') = 'Sadece eSIM'`
         : `(p.specs->>'sim_type') IS DISTINCT FROM 'Sadece eSIM'`);
     }
-    if (filters.highRefreshRate) conditions.push(`(p.specs->>'refresh_rate_hz')::int ${negated ? '<' : '>='} 120`);
+    // refresh_rate_hz artık SQL'de değil, aşağıda numericThresholds ile
+    // JS post-filter olarak uygulanıyor (bkz. yukarıdaki not) — laptop
+    // motorundaki AYNI değişiklik, aynı sebep (dürüst geri düşüş).
     if (filters.headphoneJack) conditions.push(`(p.specs->>'has_headphone_jack')::boolean = ${negated ? 'false' : 'true'}`);
     if (filters.expandableStorage) conditions.push(`(p.specs->>'has_expandable_storage')::boolean = ${negated ? 'false' : 'true'}`);
     if (filters.cameraButton) conditions.push(`(p.specs->>'has_camera_button')::boolean = ${negated ? 'false' : 'true'}`);
@@ -597,10 +1161,12 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
     const sellersParamIdx = params.length;
     const { rows: candidates } = await pool.query(
       `SELECT p.id, p.canonical_name, b.name AS brand, p.specs,
+              -- KRİTİK: o.in_stock = true ZORUNLU (üçünde de) — bkz.
+              -- /api/products'daki AYNI notun tam açıklaması.
               (SELECT MIN(o.price) FROM offers o JOIN sellers s2 ON s2.id = o.seller_id
-                 WHERE o.product_id = p.id AND s2.name = ANY($${sellersParamIdx}::text[])) AS best_price,
+                 WHERE o.product_id = p.id AND s2.name = ANY($${sellersParamIdx}::text[]) AND o.in_stock = true) AS best_price,
               (SELECT s.name FROM offers o JOIN sellers s ON s.id = o.seller_id
-                 WHERE o.product_id = p.id AND s.name = ANY($${sellersParamIdx}::text[])
+                 WHERE o.product_id = p.id AND s.name = ANY($${sellersParamIdx}::text[]) AND o.in_stock = true
                  ORDER BY o.price ASC LIMIT 1) AS best_seller,
               -- Önceden burada doğrudan o.affiliate_url seçilip ai-search
               -- yanıtında ham hâliyle gönderiliyordu — artık offer.id
@@ -608,7 +1174,7 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
               -- (bkz. GET /satici-git/:offerId). Gerçek link artık AI
               -- arama sonucunda da sayfa kaynağında hiç görünmüyor.
               (SELECT o.id FROM offers o JOIN sellers s3 ON s3.id = o.seller_id
-                 WHERE o.product_id = p.id AND s3.name = ANY($${sellersParamIdx}::text[])
+                 WHERE o.product_id = p.id AND s3.name = ANY($${sellersParamIdx}::text[]) AND o.in_stock = true
                  ORDER BY o.price ASC LIMIT 1) AS best_offer_id
        FROM products p
        JOIN brands b ON b.id = p.brand_id
@@ -734,6 +1300,14 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
       // şeyi önermek yanlış olur.
       pool_ = candidates.filter(c => c.best_price !== null);
     }
+
+    // Sayısal eşikler (RAM/depolama/pil/kamera MP/ekran/ağırlık/şarj/
+    // parlaklık/Hz) — fiyat filtresiyle AYNI "dürüst geri düşüş" mantığı:
+    // bir kriter sıfır sonuç verirse SADECE o kriter atlanır, önceki
+    // (başarıyla uygulanmış) kriterler korunur (bkz. numeric-field-filters.js).
+    const { pool: poolAfterNumeric, unmet: unmetNumeric } = applyNumericThresholds(pool_, numericThresholds);
+    pool_ = poolAfterNumeric;
+
     // budgetUnmet: bütçeyi karşılayan HİÇBİR telefon yoksa true olur — bu
     // durumda tüm listeye geri düşülüyor (boş sonuç göstermektense en
     // yakın/en uygun seçeneği gösteriyoruz), ama aşağıdaki "reasons"
@@ -812,16 +1386,27 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
     // ayrıca puanlanmasın — aksi halde kablosuz şarjı OLMAYAN telefonlar
     // arasında (hepsi 0 puan alacağından) anlamsız bir tiebreak olurdu.
     const activeSoftKeys = Object.keys(SOFT_METRICS).filter(k => filters[k] && !(k === 'wirelessCharge' && negated));
+    // "X olmayan telefon" — yumuşak sıralama sinyalleri için de negasyon
+    // desteği (bkz. laptop handler'ındaki AYNI mekanizmanın tam açıklaması).
+    // camera/zoom/selfie/durable ÇIKARILDI: bunlar birden fazla spec'i
+    // birleştiren KARMAŞIK puanlar ve "iyi kameralı olmayan" gibi bir istek
+    // için "en kötü kamera"yı bir ÖZELLİK gibi metinle sunmak (ör.
+    // "Kapsamlı kamera sistemi: 8MP...") kendiyle çelişen/yanıltıcı bir
+    // mesaj üretirdi — bu yüzden bu alanlarda negasyon şimdilik kapsam dışı.
+    const NON_NEGATABLE_SOFT_KEYS = new Set(['camera', 'zoom', 'selfie', 'durable']);
+    const invertedScore = (key, raw) => (effInverted(key) && !NON_NEGATABLE_SOFT_KEYS.has(key)) ? (100 - raw) : raw;
 
-    if (activeSoftKeys.length === 0 && filters.top) {
+    if (activeSoftKeys.length === 0 && filters.top && !effInverted('top')) {
       // Tek kriter: ham donanım gücü — nüanslı (ve varsa ücretli AI destekli)
-      // rankByPower() yolu aynen korunuyor.
+      // rankByPower() yolu aynen korunuyor. NOT: negated ise bu dala
+      // GİRMİYORUZ (bkz. laptop handler'ındaki aynı notun açıklaması) —
+      // aşağıdaki genel ağırlıklı puan yoluna düşüyor (hwRange üzerinden).
       const { ranking, reasoning, usedAI } = await rankByPower(pool_);
       const orderMap = new Map(ranking.map((id, i) => [id, i]));
       pool_.sort((a, b) => (orderMap.get(a.id) ?? 999) - (orderMap.get(b.id) ?? 999));
       topReasoning = reasoning;
       topUsedAI = usedAI;
-    } else if (activeSoftKeys.length > 0) {
+    } else if (activeSoftKeys.length > 0 || filters.top) {
       // Bir ya da daha fazla yumuşak kriter var (donanım gücüyle birlikte
       // istenmiş olabilir) — hepsini tek bir bileşik puanda harmanla.
       // "top" da isteniyorsa, ücretli AI çağrısı yapmadan (bileşik puanla
@@ -851,17 +1436,23 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
         let weightedSum = 0, totalWeight = 0;
         for (const key of activeSoftKeys) {
           const w = WEIGHT[key] || 1;
-          weightedSum += normalize(SOFT_METRICS[key](c), ranges[key].min, ranges[key].max) * w;
+          const norm = invertedScore(key, normalize(SOFT_METRICS[key](c), ranges[key].min, ranges[key].max));
+          weightedSum += norm * w;
           totalWeight += w;
         }
         if (hwRange) {
-          weightedSum += normalize(computeHardwareScore(c), hwRange.min, hwRange.max);
+          const hwNorm = invertedScore('top', normalize(computeHardwareScore(c), hwRange.min, hwRange.max));
+          weightedSum += hwNorm;
           totalWeight += 1;
         }
         return weightedSum / totalWeight;
       };
       pool_.sort((a, b) => scoreOf(b) - scoreOf(a));
-      if (filters.top) topReasoning = 'Donanım gücü, istediğin diğer özelliklerle birlikte değerlendirildi';
+      if (filters.top) {
+        topReasoning = effInverted('top')
+          ? 'Donanım gücü tersine çevrilerek (en düşük performanslı öncelikli) diğer özelliklerle birlikte değerlendirildi'
+          : 'Donanım gücü, istediğin diğer özelliklerle birlikte değerlendirildi';
+      }
     } else {
       pool_.sort((a, b) => a.best_price - b.best_price);
     }
@@ -902,10 +1493,21 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
           ? `Bu bütçede (${filters.minPrice.toLocaleString('tr-TR')} TL üzeri) uygun telefon bulunamadı, en yakın seçenek gösteriliyor: ${bestPriceNum.toLocaleString('tr-TR')} TL`
           : `Belirtilen (${filters.minPrice.toLocaleString('tr-TR')} TL) üzerinde: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
       }
+      // Sayısal eşik kriterleri (RAM/depolama/pil/kamera MP/ekran/ağırlık/
+      // şarj/parlaklık) — refresh_rate_hz burada AYRI ele alınıyor
+      // (aşağıda, negated'e duyarlı daha doğal bir metinle), o yüzden
+      // burada atlanıyor.
+      for (const [fieldKey, threshold] of Object.entries(numericThresholds)) {
+        if (fieldKey === 'refresh_rate_hz') continue;
+        const actualValue = pick.specs[fieldKey];
+        const wasUnmet = unmetNumeric.some(u => u.fieldKey === fieldKey);
+        if (actualValue == null && !wasUnmet) continue;
+        reasons.push(formatNumericReason(fieldKey, threshold, actualValue, wasUnmet));
+      }
       if (filters.nfc && negated) reasons.push('NFC desteklemiyor (istediğin gibi)');
       else if (filters.nfc && pick.specs.has_nfc) reasons.push('NFC destekli');
       if (filters.wirelessCharge && negated) reasons.push('Kablosuz şarj desteklemiyor (istediğin gibi)');
-      else if (filters.wirelessCharge && pick.specs.wireless_charging_watts) reasons.push(`En hızlı kablosuz şarj: ${pick.specs.wireless_charging_watts}W`);
+      else if (filters.wirelessCharge && !numericThresholds.wireless_charging_watts && pick.specs.wireless_charging_watts) reasons.push(`En hızlı kablosuz şarj: ${pick.specs.wireless_charging_watts}W`);
       if (filters.camera) {
         const parts = [`${pick.specs.main_camera_mp}MP ana kamera`];
         if (pick.specs.ultra_wide_mp) parts.push(`${pick.specs.ultra_wide_mp}MP geniş açı`);
@@ -915,11 +1517,18 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
       }
       if (filters.zoom && pick.specs.optical_zoom_x) reasons.push(`En yüksek optik zoom: ${pick.specs.optical_zoom_x}x`);
       if (filters.selfie && pick.specs.front_camera_mp) reasons.push(`En yüksek çözünürlüklü ön kamera: ${pick.specs.front_camera_mp}MP`);
-      if (filters.battery) reasons.push(`Yüksek batarya kapasitesi: ${pick.specs.battery_mah}mAh`);
-      if (filters.fastCharge && pick.specs.wired_charging_watts) reasons.push(`En hızlı kablolu şarj: ${pick.specs.wired_charging_watts}W`);
-      if (filters.light && pick.specs.weight_g) reasons.push(`Bu segmentteki en hafif seçeneklerden: ${pick.specs.weight_g}g`);
+      // NOT: her satır !numericThresholds.<alan> ile korunuyor — bkz. laptop
+      // handler'ındaki aynı notun tam açıklaması (sayısal eşik zaten kendi
+      // reasons satırını eklediyse bu eski "yumuşak" satır tekrar etmesin).
+      // NOT: negated satırlar için bkz. laptop handler'ındaki aynı notun
+      // tam açıklaması (skor invertedScore() ile ters çevrildi, metin de
+      // buna uygun gösteriliyor — durable HARİÇ, o negasyonda değişmeden
+      // kalıyor, bkz. NON_NEGATABLE_SOFT_KEYS).
+      if (filters.battery && !numericThresholds.battery_mah) reasons.push(effInverted('battery') ? `Daha düşük batarya kapasitesi: ${pick.specs.battery_mah}mAh` : `Yüksek batarya kapasitesi: ${pick.specs.battery_mah}mAh`);
+      if (filters.fastCharge && !numericThresholds.wired_charging_watts && pick.specs.wired_charging_watts) reasons.push(effInverted('fastCharge') ? `Daha yavaş kablolu şarj: ${pick.specs.wired_charging_watts}W` : `En hızlı kablolu şarj: ${pick.specs.wired_charging_watts}W`);
+      if (filters.light && !numericThresholds.weight_g && pick.specs.weight_g) reasons.push(effInverted('light') ? `Bu segmentteki en ağır seçeneklerden: ${pick.specs.weight_g}g` : `Bu segmentteki en hafif seçeneklerden: ${pick.specs.weight_g}g`);
       if (filters.durable && pick.specs.ip_rating) reasons.push(`Yüksek dayanıklılık sınıfı: ${pick.specs.ip_rating}`);
-      if (filters.brightScreen && pick.specs.screen_nits) reasons.push(`Güneş altında bile okunaklı, parlak ekran: ${pick.specs.screen_nits} nit`);
+      if (filters.brightScreen && !numericThresholds.screen_nits && pick.specs.screen_nits) reasons.push(effInverted('brightScreen') ? `Daha düşük parlaklıkta bir ekran: ${pick.specs.screen_nits} nit` : `Güneş altında bile okunaklı, parlak ekran: ${pick.specs.screen_nits} nit`);
       if (filters.video8k && negated) reasons.push('8K video kaydı desteklemiyor (istediğin gibi)');
       else if (filters.video8k && pick.specs.video_8k) reasons.push('8K çözünürlükte video kaydı yapabiliyor');
       if (filters.satellite && negated) reasons.push('Uydu bağlantısı yok (istediğin gibi)');
@@ -932,20 +1541,26 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
       else if (filters.irBlaster && pick.specs.has_ir_blaster) reasons.push('Kızılötesi (IR) kumanda özelliği var — TV, klima gibi cihazları telefonla yönetebilirsin');
       if (filters.faceUnlock && pick.specs.biometric_unlock) reasons.push(`Kilit açma yöntemi: ${pick.specs.biometric_unlock}`);
       if (filters.physicalSim && pick.specs.sim_type) reasons.push(`SIM desteği: ${pick.specs.sim_type}`);
-      if (filters.highRefreshRate && negated && pick.specs.refresh_rate_hz) reasons.push(`Standart yenileme hızlı ekran: ${pick.specs.refresh_rate_hz}Hz`);
-      else if (filters.highRefreshRate && pick.specs.refresh_rate_hz) reasons.push(`Yüksek yenileme hızlı, akıcı ekran: ${pick.specs.refresh_rate_hz}Hz`);
+      // KRİTİK DÜZELTME: bu satır önceden SADECE dilbilgisel "olmayan"
+      // negasyonuna (negated) bakıyordu — ama artık numericThresholds
+      // AÇIK sayı+yön sorgularından da ("120Hz ALTI ekranlı telefon")
+      // gelebiliyor, ve bu durumda negated=false olsa bile eşik aslında
+      // bir ÜST SINIR (max, "standart/düşük Hz"). Doğru sinyal her zaman
+      // eşiğin KENDİSİ (max mı min mi) — negated'e değil ona bakılmalı.
+      if (numericThresholds.refresh_rate_hz && numericThresholds.refresh_rate_hz.max != null && pick.specs.refresh_rate_hz != null) reasons.push(`Standart yenileme hızlı ekran: ${pick.specs.refresh_rate_hz}Hz`);
+      else if (numericThresholds.refresh_rate_hz && pick.specs.refresh_rate_hz) reasons.push(`Yüksek yenileme hızlı, akıcı ekran: ${pick.specs.refresh_rate_hz}Hz`);
       if (filters.headphoneJack && negated) reasons.push('Kulaklık girişi yok (istediğin gibi)');
       else if (filters.headphoneJack && pick.specs.has_headphone_jack) reasons.push('3.5mm kulaklık girişi var — kablosuz kulaklığa gerek kalmadan bağlanabiliyorsun');
       if (filters.expandableStorage && negated) reasons.push('Hafıza kartı desteklemiyor (istediğin gibi)');
       else if (filters.expandableStorage && pick.specs.has_expandable_storage) reasons.push('microSD kart ile depolama alanı genişletilebiliyor');
       if (filters.cameraButton && negated) reasons.push('Fiziksel kamera düğmesi yok (istediğin gibi)');
       else if (filters.cameraButton && pick.specs.has_camera_button) reasons.push('Fiziksel kamera düğmesiyle hızlı çekim yapabiliyorsun');
-      if (filters.cheap && !filters.maxPrice && !filters.minPrice) reasons.push(`Uygun fiyatlı bir seçenek: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
-      if (filters.expensive) reasons.push(`Üst segment bir seçenek: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
-      if (filters.bigScreen && pick.specs.screen_inch) reasons.push(`Bu segmentteki en büyük ekranlardan: ${pick.specs.screen_inch}"`);
-      if (filters.smallScreen && pick.specs.screen_inch) reasons.push(`Kompakt, küçük ekran: ${pick.specs.screen_inch}"`);
-      if (filters.highRam && pick.specs.ram_gb) reasons.push(`Yüksek RAM: ${pick.specs.ram_gb}GB`);
-      if (filters.newest && pick.specs.release_year) reasons.push(`En yeni modellerden: ${pick.specs.release_year}`);
+      if (filters.cheap && !filters.maxPrice && !filters.minPrice) reasons.push(negated ? `Üst segment bir seçenek: ${bestPriceNum.toLocaleString('tr-TR')} TL` : `Uygun fiyatlı bir seçenek: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
+      if (filters.expensive) reasons.push(negated ? `Uygun fiyatlı bir seçenek: ${bestPriceNum.toLocaleString('tr-TR')} TL` : `Üst segment bir seçenek: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
+      if (filters.bigScreen && !numericThresholds.screen_inch && pick.specs.screen_inch) reasons.push(negated ? `Kompakt, küçük ekran: ${pick.specs.screen_inch}"` : `Bu segmentteki en büyük ekranlardan: ${pick.specs.screen_inch}"`);
+      if (filters.smallScreen && !numericThresholds.screen_inch && pick.specs.screen_inch) reasons.push(negated ? `Bu segmentteki en büyük ekranlardan: ${pick.specs.screen_inch}"` : `Kompakt, küçük ekran: ${pick.specs.screen_inch}"`);
+      if (filters.highRam && !numericThresholds.ram_gb && pick.specs.ram_gb) reasons.push(effInverted('highRam') ? `Düşük RAM: ${pick.specs.ram_gb}GB` : `Yüksek RAM: ${pick.specs.ram_gb}GB`);
+      if (filters.newest && pick.specs.release_year) reasons.push(effInverted('newest') ? `Daha eski, köklü bir modelden: ${pick.specs.release_year}` : `En yeni modellerden: ${pick.specs.release_year}`);
       if (colorMatch && Array.isArray(pick.specs.colors)) {
         const exactColor = pick.specs.colors.find(c => c.toLowerCase().includes(colorMatch));
         if (exactColor) reasons.push(`Bu renk seçeneğiyle satılıyor: ${exactColor}`);
@@ -954,7 +1569,7 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
         const label = topUsedAI ? 'Yapay zeka analizi' : 'Donanım analizi';
         reasons.push(topReasoning
           ? `${label}: ${topReasoning}`
-          : `En yüksek donanım seviyesi: ${pick.specs.ram_gb}GB RAM, ${pick.specs.chip}`);
+          : (effInverted('top') ? `En düşük donanım seviyesi: ${pick.specs.ram_gb}GB RAM, ${pick.specs.chip}` : `En yüksek donanım seviyesi: ${pick.specs.ram_gb}GB RAM, ${pick.specs.chip}`));
       }
       if (reasons.length === 0) reasons.push(`En uygun fiyatlı seçenek: ${bestPriceNum.toLocaleString('tr-TR')} TL`);
       reasons.push(`En uygun fiyat ${pick.best_seller} üzerinden`);
@@ -1087,11 +1702,12 @@ app.get('/satici-git/:offerId', async (req, res) => {
 app.get('/urun/:id/:slug?', async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT p.id, p.canonical_name, b.name AS brand, p.specs,
+      `SELECT p.id, p.canonical_name, b.name AS brand, p.specs, c.slug AS category,
               (SELECT MIN(ph.price) FROM price_history ph
                  JOIN offers o ON o.id = ph.offer_id
                  WHERE o.product_id = p.id AND ph.recorded_at >= NOW() - INTERVAL '30 days') AS min_price_30d
        FROM products p JOIN brands b ON b.id = p.brand_id
+       JOIN categories c ON c.id = p.category_id
        WHERE p.id = $1`,
       [req.params.id]
     );
@@ -1118,10 +1734,15 @@ app.get('/urun/:id/:slug?', async (req, res) => {
 // ---------------------------------------------------------------------
 app.get('/sitemap.xml', async (req, res) => {
   try {
+    // NOT: laptop kategorisi burada de bilerek dahil — şu an production
+    // veritabanında hiç laptop satırı yok (kod+tasarım tamamlanıp veri
+    // taşınana kadar sadece local'de var), o yüzden bu sorgu canlıda
+    // zararsızca 0 ek satır döner; laptop verisi taşındığında sitemap
+    // otomatik olarak onları da içerecek.
     const { rows } = await pool.query(
       `SELECT p.id, p.canonical_name FROM products p
        JOIN categories c ON c.id = p.category_id
-       WHERE c.slug = 'telefon'`
+       WHERE c.slug IN ('telefon', 'laptop')`
     );
     // Anasayfa (statik frontend'de barınıyor) ÖNCELİKLE listelenmeli —
     // önceden sadece ürün sayfaları vardı, arama motorları asıl giriş
