@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "node --watch server.js"
   },
   "dependencies": {
     "express": "^4.19.2",
@@ -13,12 +13,8 @@
     "cors": "^2.8.5",
     "dotenv": "^16.4.5"
   },
-  "devDependencies": {
-    "nodemon": "^3.1.4"
-  },
   "overrides": {
     "qs": "^6.16.0",
-    "brace-expansion": "^5.0.12",
     "proxy-addr": "^2.0.8"
   }
 }
