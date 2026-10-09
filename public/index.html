@@ -664,7 +664,14 @@ const inStockFirst = offers => {
 // bir ürünün üçünde de teklifi olmaması (satışta olmaması) gerçek bir
 // durum, boş dizi üzerinde .reduce() bunu ele almadan çökerdi. null
 // dönüyor, çağıran taraflar bunu "satışta değil" olarak ele almalı.
-const minOffer = p => p.offers.length ? inStockFirst(p.offers).reduce((a,b)=>a.price<b.price?a:b) : null;
+// SADECE stokta olan teklifler sayılır: hiçbiri stokta değilse null döner
+// ("satış yok"). Eskiden hepsi stoksuzsa yine de en ucuz stoksuz teklifi
+// döndürüyordu — satın alınamayan bir ürünün fiyatı "en uygun" diye
+// gösteriliyor ve fiyata göre sıralamada araya karışıyordu.
+const minOffer = p => {
+  const live = p.offers.filter(o => o.inStock);
+  return live.length ? live.reduce((a,b)=>a.price<b.price?a:b) : null;
+};
 
 // Ürün detay sayfası (backend'de SSR edilen /urun/:id/:slug) linkleri
 // için — slug tamamen kozmetik, backend zaten :id'ye göre arıyor.
@@ -1199,10 +1206,25 @@ function selectCardVariant(p, storageGb, color){
     || variants[0];
   if (!match) return;
   const activeOffers = match.offers;
-  const best = inStockFirst(activeOffers).sort((a,b)=>a.price-b.price)[0];
-  if (!best) return;
+  const best = activeOffers.filter(o => o.inStock).sort((a,b)=>a.price-b.price)[0];
 
   const priceEl = document.getElementById('price-'+p.id);
+  if (!best) {
+    // Seçilen GB/renk kombinasyonunun hiçbir teklifi stokta değil: eski
+    // (stoksuz) fiyatı "en uygun" diye göstermek yerine dürüstçe belirt;
+    // teklif listesi yine de (Stokta yok rozetiyle) görünür kalsın.
+    if (priceEl) priceEl.textContent = 'Şu an stokta yok';
+    const sellerNone = document.getElementById('seller-line-'+p.id);
+    if (sellerNone) sellerNone.textContent = '';
+    const lowestNone = document.getElementById('lowest-badge-'+p.id);
+    if (lowestNone) lowestNone.style.display = 'none';
+    const countNone = document.getElementById('offers-count-'+p.id);
+    if (countNone) countNone.textContent = `Satıcılar (${activeOffers.length})`;
+    const listNone = document.getElementById('offers-'+p.id);
+    if (listNone) listNone.innerHTML = offerRowsHTML(activeOffers, true);
+    return;
+  }
+
   if (priceEl) priceEl.textContent = fmt(best.price);
   const specStorageEl = document.getElementById('spec-storage-'+p.id);
   if (specStorageEl) specStorageEl.textContent = formatGb(storageGb);
@@ -1253,15 +1275,21 @@ function cardHTML(p){
   const displayColors = displayColorsFor(p);
   const variants = variantsFor(p);
   const hasVariantPicker = variants.length > 1;
-  const defaultVariant = hasVariantPicker ? variants[0] : null;
+  // Başlangıç varyantı: stokta teklifi olan ilk (en ucuz) kombinasyon — hepsi
+  // stoksuzsa ilkine düşer. Aksi halde en ucuz kombinasyon stoksuz olduğunda
+  // ürünün stokta olan diğer kombinasyonları da "satış yok" görünürdü.
+  const defaultVariant = hasVariantPicker
+    ? (variants.find(v => v.offers.some(o => o.inStock)) || variants[0])
+    : null;
   const sorted = [...p.offers].sort((a,b)=>a.price-b.price);
   // Varyant seçicisi olan bir üründe başlangıç görünümü en ucuz gerçek
   // kombinasyona göre; olmayan üründe eskisi gibi tüm tekliflere göre.
   const activeOffers = hasVariantPicker ? defaultVariant.offers : sorted;
-  // "En uygun" olarak stokta olmayan bir teklifi göstermeyelim — varsa
-  // stoktakiler arasından en ucuzu, hiçbiri stokta değilse yine de en
-  // ucuzu (boş göstermek daha kötü olur)
-  const best = inStockFirst(activeOffers).sort((a,b)=>a.price-b.price)[0];
+  // "En uygun" olarak stokta olmayan bir teklifi ASLA göstermeyelim: satın
+  // alınamayan bir ürünün fiyatını "en uygun" diye görmek yanıltıcı. Hiçbir
+  // teklif stokta değilse aşağıdaki daraltılmış karta ("Şu an stokta yok")
+  // düşüyoruz.
+  const best = activeOffers.filter(o => o.inStock).sort((a,b)=>a.price-b.price)[0];
   // Teklifler artık sadece Hepsiburada/Trendyol/Amazon TR'den geliyor —
   // üçünde de teklifi olmayan bir ürün için `best` undefined olur.
   // Fiyat/satıcı bilgisi göstermeye çalışmak yerine dürüstçe "Satış
@@ -1281,7 +1309,7 @@ function cardHTML(p){
       ${badgeFor(p)}
       ${colorDotsHTML(displayColors)}
       <div class="price-block">
-        <p class="muted" style="margin-top:10px">Satış yok</p>
+        <p class="muted" style="margin-top:10px">${p.offers.length ? 'Şu an stokta yok' : 'Satış yok'}</p>
       </div>
     </div>`;
   }
