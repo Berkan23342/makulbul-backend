@@ -308,14 +308,48 @@ const visitLimiter = createRateLimiter({
   windowMs: 60 * 1000, max: 60, keyFn: req => req.ip,
 });
 
+// Trafik kaynağı: ziyaretçinin geldiği site (yalnızca alan adı — yol/sorgu
+// dizisi hiç toplanmaz) ya da ?utm_source=. Kendi sitemizden gelenler
+// "doğrudan" sayılır. Bilinen kaynaklar tek isme indirgenir.
+const SOURCE_ALIASES = [
+  [/(^|\.)google\./, 'google'], [/(^|\.)bing\.com$/, 'bing'], [/(^|\.)yandex\./, 'yandex'],
+  [/duckduckgo\.com$/, 'duckduckgo'], [/(^|\.)instagram\.com$/, 'instagram'],
+  [/(^|\.)(facebook|fb)\.com$|^l\.facebook\.com$|^lm\.facebook\.com$/, 'facebook'],
+  [/(^|\.)(twitter|x)\.com$|^t\.co$/, 'x'], [/(^|\.)tiktok\.com$/, 'tiktok'],
+  [/(^|\.)youtube\.com$|^youtu\.be$/, 'youtube'], [/(^|\.)(t\.me|telegram\.org)$/, 'telegram'],
+  [/(^|\.)(whatsapp\.com|wa\.me)$/, 'whatsapp'], [/(^|\.)reddit\.com$/, 'reddit'],
+  [/(^|\.)(donanimhaber\.com|technopat\.net|eksisozluk\.com)$/, null],
+];
+function classifySource(refHost, utm, ownHost) {
+  const clean = v => String(v || '').toLowerCase().replace(/[^a-z0-9._-]/g, '').slice(0, 40);
+  if (utm) { const u = clean(utm); if (u) return u; }
+  const host = clean(refHost).replace(/^www\./, '');
+  if (!host || host === ownHost || host.endsWith('.' + ownHost)) return 'doğrudan';
+  for (const [re, name] of SOURCE_ALIASES) if (re.test(host)) return name || host;
+  return host;
+}
+const BOT_UA_RE = /bot|crawl|spider|slurp|headless|lighthouse|preview|facebookexternalhit|whatsapp|telegram|curl|wget|python|node-fetch|axios/i;
+
 app.post('/api/visit', visitLimiter, async (req, res) => {
   try {
     const path = String(req.body?.path || '').slice(0, 300);
     if (!path) return res.status(400).json({ error: 'path zorunludur' });
-    await pool.query(
-      `INSERT INTO page_views (path, referrer) VALUES ($1, $2)`,
-      [path, req.get('referer') || null]
-    );
+    const ua = req.get('user-agent') || '';
+    // Botlar (arama motoru tarayıcıları, link önizleyiciler) gerçek ziyaretçi
+    // değil — istatistiği şişirmesinler.
+    if (BOT_UA_RE.test(ua)) return res.status(204).end();
+    const ownHost = (req.get('host') || '').replace(/^www\./, '').split(':')[0];
+    const source = classifySource(req.body?.ref, req.body?.utm, ownHost);
+    const device = /Mobi|Android|iPhone|iPad/i.test(ua) ? 'mobil' : 'masaüstü';
+    try {
+      await pool.query(
+        `INSERT INTO page_views (path, referrer, source, device) VALUES ($1, $2, $3, $4)`,
+        [path, req.get('referer') || null, source, device]
+      );
+    } catch (e) {
+      if (e.code !== '42703') throw e;   // source/device sütunları henüz yok (analytics-migration.sql uygulanmadı)
+      await pool.query(`INSERT INTO page_views (path, referrer) VALUES ($1, $2)`, [path, req.get('referer') || null]);
+    }
     res.status(204).end();
   } catch (err) {
     console.error(err);
@@ -330,28 +364,75 @@ app.post('/api/visit', visitLimiter, async (req, res) => {
 // istekler reddedilir. STATS_KEY tanımlı değilse (yerel geliştirme)
 // endpoint açık kalır.
 // ---------------------------------------------------------------------
+async function collectStats() {
+  const q = async (sql) => { try { return (await pool.query(sql)).rows; } catch (e) { return null; } };
+  const [total, last30, topPaths, sources, devices, clickTotals, clickSellers, clickProducts, clickDaily] = await Promise.all([
+    q(`SELECT COUNT(*) AS total FROM page_views`),
+    q(`SELECT date_trunc('day', created_at)::date AS date, COUNT(*) AS views FROM page_views
+       WHERE created_at >= NOW() - INTERVAL '30 days' GROUP BY date ORDER BY date ASC`),
+    q(`SELECT path, COUNT(*) AS views FROM page_views WHERE created_at >= NOW() - INTERVAL '30 days'
+       GROUP BY path ORDER BY views DESC LIMIT 20`),
+    q(`SELECT COALESCE(source,'(bilinmiyor)') AS source, COUNT(*) AS views FROM page_views
+       WHERE created_at >= NOW() - INTERVAL '30 days' GROUP BY 1 ORDER BY views DESC LIMIT 15`),
+    q(`SELECT COALESCE(device,'(bilinmiyor)') AS device, COUNT(*) AS views FROM page_views
+       WHERE created_at >= NOW() - INTERVAL '30 days' GROUP BY 1 ORDER BY views DESC`),
+    q(`SELECT COUNT(*) AS clicks FROM offer_clicks WHERE created_at >= NOW() - INTERVAL '30 days'`),
+    q(`SELECT s.name AS seller, COUNT(*) AS clicks FROM offer_clicks c JOIN offers o ON o.id = c.offer_id
+       JOIN sellers s ON s.id = o.seller_id WHERE c.created_at >= NOW() - INTERVAL '30 days'
+       GROUP BY 1 ORDER BY clicks DESC`),
+    q(`SELECT p.canonical_name AS product, COUNT(*) AS clicks FROM offer_clicks c JOIN offers o ON o.id = c.offer_id
+       JOIN products p ON p.id = o.product_id WHERE c.created_at >= NOW() - INTERVAL '30 days'
+       GROUP BY 1 ORDER BY clicks DESC LIMIT 15`),
+    q(`SELECT date_trunc('day', created_at)::date AS date, COUNT(*) AS clicks FROM offer_clicks
+       WHERE created_at >= NOW() - INTERVAL '30 days' GROUP BY 1 ORDER BY 1 ASC`),
+  ]);
+  return {
+    totalViews: total ? Number(total[0].total) : null,
+    last30Days: last30 || [], topPaths: topPaths || [],
+    // null: ilgili sütun/tablo yok → analytics-migration.sql henüz uygulanmamış
+    sources, devices,
+    clicks: clickTotals ? { last30Days: Number(clickTotals[0].clicks), bySeller: clickSellers || [], topProducts: clickProducts || [], daily: clickDaily || [] } : null,
+  };
+}
+function statsAuthorized(req) {
+  return !process.env.STATS_KEY || req.query.key === process.env.STATS_KEY;
+}
+
 app.get('/api/stats', async (req, res) => {
-  if (process.env.STATS_KEY && req.query.key !== process.env.STATS_KEY) {
-    return res.status(403).json({ error: 'Yetkisiz' });
-  }
+  if (!statsAuthorized(req)) return res.status(403).json({ error: 'Yetkisiz' });
   try {
-    const { rows: totalRows } = await pool.query(`SELECT COUNT(*) AS total FROM page_views`);
-    const { rows: last30 } = await pool.query(`
-      SELECT date_trunc('day', created_at)::date AS date, COUNT(*) AS views
-      FROM page_views
-      WHERE created_at >= NOW() - INTERVAL '30 days'
-      GROUP BY date ORDER BY date ASC
-    `);
-    const { rows: topPaths } = await pool.query(`
-      SELECT path, COUNT(*) AS views
-      FROM page_views
-      WHERE created_at >= NOW() - INTERVAL '30 days'
-      GROUP BY path ORDER BY views DESC LIMIT 20
-    `);
-    res.json({ totalViews: Number(totalRows[0].total), last30Days: last30, topPaths });
+    res.set('Cache-Control', 'no-store');
+    res.json(await collectStats());
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'İstatistikler getirilemedi' });
+  }
+});
+
+// Okunaklı panel: /istatistik?key=<STATS_KEY> — yalnızca sahibi için, indekslenmez.
+const escHtml = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+app.get('/istatistik', async (req, res) => {
+  if (!statsAuthorized(req)) return res.status(403).send('Yetkisiz');
+  res.set({ 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow' });
+  try {
+    const st = await collectStats();
+    const table = (title, rows, cols) => !rows ? `<h2>${title}</h2><p class="m">Veri yok — <code>analytics-migration.sql</code> henüz uygulanmamış olabilir.</p>` :
+      `<h2>${title}</h2>${rows.length ? `<table>${rows.map(r => `<tr>${cols.map((c, i) => `<td${i ? ' class="n"' : ''}>${escHtml(r[c] instanceof Date ? r[c].toISOString().slice(0, 10) : r[c])}</td>`).join('')}</tr>`).join('')}</table>` : '<p class="m">Henüz kayıt yok.</p>'}`;
+    const days = st.last30Days.reduce((a, d) => a + Number(d.views), 0);
+    res.type('html').send(`<!doctype html><html lang="tr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow"><title>İstatistik — Makulbul</title>
+<style>body{margin:0;background:#0a0a0e;color:#edeef3;font:15px/1.5 system-ui,sans-serif;padding:24px;max-width:760px;margin:0 auto}h1{font-size:22px}h2{font-size:16px;margin:28px 0 8px;color:#c8ff4d}.k{display:flex;gap:12px;flex-wrap:wrap}.c{background:#16171f;border:1px solid #2a2c38;border-radius:12px;padding:14px 18px;min-width:130px}.c b{display:block;font-size:26px}table{width:100%;border-collapse:collapse}td{padding:6px 8px;border-bottom:1px solid #1e202b}td.n{text-align:right;font-variant-numeric:tabular-nums;color:#9a9db0}.m{color:#9a9db0}code{background:#16171f;padding:1px 6px;border-radius:6px}</style></head><body>
+<h1>Makulbul — son 30 gün</h1>
+<div class="k"><div class="c"><b>${days}</b>görüntüleme</div><div class="c"><b>${st.clicks ? st.clicks.last30Days : '–'}</b>satıcı tıklaması</div><div class="c"><b>${st.totalViews ?? '–'}</b>toplam (tüm zamanlar)</div></div>
+${table('Trafik kaynakları', st.sources, ['source', 'views'])}
+${table('Cihaz', st.devices, ['device', 'views'])}
+${table('En çok görüntülenen sayfalar', st.topPaths, ['path', 'views'])}
+${table('Satıcıya tıklamalar (satıcı)', st.clicks && st.clicks.bySeller, ['seller', 'clicks'])}
+${table('Satıcıya tıklamalar (ürün)', st.clicks && st.clicks.topProducts, ['product', 'clicks'])}
+${table('Günlük görüntüleme', st.last30Days, ['date', 'views'])}
+</body></html>`);
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('İstatistikler getirilemedi');
   }
 });
 
@@ -1751,6 +1832,12 @@ app.get('/satici-git/:offerId', async (req, res) => {
       console.error(`⚠ /satici-git: satıcı alan adıyla uyuşmayan link engellendi (offerId=${req.params.offerId})`);
       return res.status(400).send('Geçersiz link.');
     }
+    // Tıklamayı say — yönlendirmeyi ASLA geciktirmez/bozmaz (tablo yoksa sessizce atlanır).
+    if (!BOT_UA_RE.test(req.get('user-agent') || '')) {
+      pool.query('INSERT INTO offer_clicks (offer_id) VALUES ($1)', [req.params.offerId]).catch(e => {
+        if (e.code !== '42P01') console.error('offer_clicks kaydedilemedi:', e.message);
+      });
+    }
     res.redirect(302, affiliateUrl);
   } catch (err) {
     console.error(err);
@@ -1842,7 +1929,7 @@ app.get('/sitemap.xml', async (req, res) => {
 });
 
 app.get('/robots.txt', (req, res) => {
-  res.type('text/plain').send(`User-agent: *\nAllow: /\nSitemap: ${BACKEND_URL}/sitemap.xml\n`);
+  res.type('text/plain').send(`User-agent: *\nAllow: /\nDisallow: /api/\nDisallow: /satici-git/\nDisallow: /istatistik\nSitemap: ${BACKEND_URL}/sitemap.xml\n`);
 });
 
 // Sosyal paylaşımda (WhatsApp/Twitter/LinkedIn önizlemesi) kullanılan

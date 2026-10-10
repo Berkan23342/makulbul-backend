@@ -1570,7 +1570,7 @@ loadProducts();
 // hiçbir şekilde etkilemez.
 window.addEventListener('load', () => {
   setTimeout(() => {
-    const payload = JSON.stringify({ path: location.pathname });
+    const payload = JSON.stringify({ path: location.pathname, ref: (function(){ try { return new URL(document.referrer).hostname; } catch (e) { return ''; } })(), utm: new URLSearchParams(location.search).get('utm_source') || '' });
     try {
       if (navigator.sendBeacon) {
         navigator.sendBeacon(`${API_BASE}/api/visit`, new Blob([payload], { type: 'application/json' }));

@@ -594,7 +594,7 @@ ${renderNav(frontendUrl)}
   // engelleniyordu. window.load + kısa gecikme + sendBeacon bunu çözüyor.
   window.addEventListener('load', function(){
     setTimeout(function(){
-      var payload = JSON.stringify({ path: location.pathname });
+      var payload = JSON.stringify({ path: location.pathname, ref: (function(){ try { return new URL(document.referrer).hostname; } catch (e) { return ''; } })(), utm: new URLSearchParams(location.search).get('utm_source') || '' });
       try {
         if (navigator.sendBeacon) {
           navigator.sendBeacon(API_BASE + '/api/visit', new Blob([payload], { type: 'application/json' }));
