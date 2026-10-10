@@ -23,7 +23,7 @@ function buildSyncSql(rows, { seller = 'Amazon TR', title = 'fiyat & stok senkro
 -- Üretildi: ${new Date().toISOString()}
 -- ${rows.length} teklif işlenir (${priced} fiyat bilgisi, ${oos} stoksuz).
 --   • price NULL ise fiyat KORUNUR, yalnızca stok durumu güncellenir.
---   • Eşleştirme: normalized_key + depolama + renk. İdempotent.
+--   • Eşleştirme: normalized_key + depolama + renk. Tekrar çalıştırmak zararsız.
 -- KULLANIM: psql "$DATABASE_URL" -f <bu-dosya>.sql
 -- ============================================================
 
@@ -48,8 +48,6 @@ chg AS (
       last_checked_at = now()
   FROM target t
   WHERE o.id = t.id
-    AND ( (t.new_price IS NOT NULL AND o.price IS DISTINCT FROM t.new_price)
-          OR o.in_stock IS DISTINCT FROM t.new_stock )
   RETURNING o.id, o.price AS price_now, t.old_price
 )
 INSERT INTO price_history (offer_id, price)
