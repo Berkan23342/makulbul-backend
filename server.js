@@ -235,6 +235,9 @@ app.get('/api/products', async (req, res) => {
 
     const { rows } = await pool.query(sql, params);
     const withOffers = await attachOffers(rows);
+    // 60 sn önbellek: laptop listesi ~2 sn sürüyordu; fiyat/stok güncellemeleri
+    // en geç 1 dk içinde yansır.
+    res.set('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
     res.json(withOffers);
   } catch (err) {
     console.error(err);
@@ -1763,6 +1766,11 @@ app.get('/satici-git/:offerId', async (req, res) => {
 // :slug tamamen kozmetik/SEO amaçlı; asıl arama :id ile yapılıyor.
 // ---------------------------------------------------------------------
 app.get('/urun/:id/:slug?', async (req, res) => {
+  // Geçersiz biçimli id Postgres'te uuid dönüşüm hatası (22P02) verip 500'e
+  // düşüyordu — Google bunu site hatası sayar; gerçek anlamı "yok" (404).
+  if (!UUID_RE.test(req.params.id)) {
+    return res.status(404).type('html').send(renderNotFoundPage(FRONTEND_URL));
+  }
   try {
     const { rows } = await pool.query(
       `SELECT p.id, p.canonical_name, b.name AS brand, p.specs, c.slug AS category,
@@ -1805,7 +1813,8 @@ app.get('/sitemap.xml', async (req, res) => {
     const { rows } = await pool.query(
       `SELECT p.id, p.canonical_name FROM products p
        JOIN categories c ON c.id = p.category_id
-       WHERE c.slug IN ('telefon', 'laptop')`
+       WHERE c.slug IN ('telefon', 'laptop')
+         AND EXISTS (SELECT 1 FROM offers o WHERE o.product_id = p.id AND o.in_stock = true)`
     );
     // Anasayfa (statik frontend'de barınıyor) ÖNCELİKLE listelenmeli —
     // önceden sadece ürün sayfaları vardı, arama motorları asıl giriş
@@ -1814,11 +1823,17 @@ app.get('/sitemap.xml', async (req, res) => {
     // "/index.html" farklı bir URL sayılıp yinelenen içerik/standart URL
     // karışıklığına yol açabiliyordu.
     const homeUrl = `  <url><loc>${FRONTEND_URL}/</loc><changefreq>daily</changefreq><priority>1.0</priority></url>`;
+    // Stokta hiç teklifi olmayan ürünler bilerek listelenmiyor: satılamayan
+    // ürün sayfaları Google'da "ince içerik" sayılıyor. Stok geri gelince
+    // sitemap'e otomatik geri döner.
+    const staticPages = ['hakkimizda', 'iletisim'].map(pg =>
+      `  <url><loc>${FRONTEND_URL}/${pg}</loc><changefreq>monthly</changefreq><priority>0.3</priority></url>`
+    ).join('\n');
     const urls = rows.map(p =>
       `  <url><loc>${BACKEND_URL}/urun/${p.id}/${slugify(p.canonical_name)}</loc><changefreq>daily</changefreq><priority>0.8</priority></url>`
     ).join('\n');
     res.type('application/xml').send(
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${homeUrl}\n${urls}\n</urlset>\n`
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${homeUrl}\n${staticPages}\n${urls}\n</urlset>\n`
     );
   } catch (err) {
     console.error(err);
@@ -1848,12 +1863,22 @@ app.get('/og-image.png', (req, res) => {
 // buraya gelir). Yukarıdaki /api/*, /urun/*, /sitemap.xml, /robots.txt,
 // /og-image.png rotalarıyla ÇAKIŞMAZ — bunlardan sonra kayıtlı olduğu
 // için sadece EŞLEŞMEYEN yollarda devreye girer.
+// Temiz adresler: /hakkimizda ve /iletisim (public/*.html dosyaları)
+['hakkimizda', 'iletisim'].forEach(pg => {
+  app.get('/' + pg, (req, res) => res.sendFile(path.join(__dirname, 'public', pg + '.html')));
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Tanımsız route'lar için düz JSON 404 (Express'in varsayılan HTML
 // sayfası yerine).
 app.use((req, res) => {
-  res.status(404).json({ error: 'Bulunamadı' });
+  // API istemcileri JSON, tarayıcı/bot ise siteyle uyumlu HTML 404 görsün.
+  if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Bulunamadı' });
+  res.status(404).type('html').send(renderNotFoundPage(FRONTEND_URL, {
+    title: 'Sayfa bulunamadı',
+    message: 'Aradığın sayfa taşınmış ya da hiç var olmamış olabilir.',
+  }));
 });
 
 // ---------------------------------------------------------------------

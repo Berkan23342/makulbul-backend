@@ -284,19 +284,21 @@ function renderNav(frontendUrl) {
   </div></header>`;
 }
 
-function renderNotFoundPage(frontendUrl) {
+function renderNotFoundPage(frontendUrl, opts = {}) {
+  const title = opts.title || 'Ürün bulunamadı';
+  const message = opts.message || 'Bu ürün kaldırılmış olabilir.';
   return `<!doctype html>
 <html lang="tr"><head><meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'">
-<title>Ürün bulunamadı — Makulbul</title>
+<title>${title} — Makulbul</title>
 <meta name="robots" content="noindex">
 ${FAVICON_LINK}
 <style>${PAGE_STYLE}</style>
 </head><body>
 ${renderNav(frontendUrl)}
 <div class="wrap not-found">
-  <h1>Ürün bulunamadı</h1>
-  <p class="muted">Bu ürün kaldırılmış olabilir.</p>
+  <h1>${title}</h1>
+  <p class="muted">${message}</p>
   <a class="back-link" href="${frontendUrl}/index.html#catalog">← Tüm modellere dön</a>
 </div>
 </body></html>`;
