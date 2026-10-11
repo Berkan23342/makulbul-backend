@@ -26,8 +26,9 @@ const hasDiscreteGpu = s => /rtx|gtx|radeon rx|arc a|arc b/i.test(String(s.gpu |
 // ---------------------------------------------------------------------
 // Ürün → sayfa listesine uygun düz kayıt (yalnızca stokta olanlar)
 // ---------------------------------------------------------------------
-function toEntry(p) {
-  const live = (p.offers || []).filter(o => o.in_stock !== false);
+function toEntry(p, { includeOutOfStock = false } = {}) {
+  let live = (p.offers || []).filter(o => o.in_stock !== false);
+  if (!live.length && includeOutOfStock) live = p.offers || [];
   if (!live.length) return null;
   const cheapest = live.reduce((a, b) => (Number(a.price) <= Number(b.price) ? a : b));
   const specs = p.specs || {};
@@ -301,4 +302,43 @@ function renderHubPage(pages, { frontendUrl }) {
   });
 }
 
-module.exports = { buildCatalog, renderGuidePage, renderHubPage };
+// ---------------------------------------------------------------------
+// Ürün sayfası için "benzer ürünler": aynı kategoride, stokta olan, fiyatı
+// ±%40 bandında ve donanım puanı en yakın olanlar. Tamamen veriden hesaplanır.
+// ---------------------------------------------------------------------
+function findSimilar(entries, self, n = 4) {
+  if (!self) return [];
+  const lo = self.price * 0.6, hi = self.price * 1.4;
+  return entries
+    .filter(e => e.category === self.category && e.id !== self.id && e.price >= lo && e.price <= hi
+      // laptopta ayrı ekran kartlı ürünle entegre kartlıyı birbirine "benzer" gösterme
+      && (self.category !== 'laptop' || hasDiscreteGpu(e.specs) === hasDiscreteGpu(self.specs)))
+    .map(e => ({ e, d: Math.abs(Math.log(e.price / self.price)) * 2 + Math.abs(e.rank - self.rank) / 12 }))
+    .sort((a, b) => a.d - b.d).slice(0, n).map(x => x.e);
+}
+
+function renderSimilarSection(list, self, { frontendUrl, selfInStock = true }) {
+  if (!list.length) return '';
+  const diff = e => {
+    const d = Math.round(e.price - self.price);
+    if (Math.abs(d) < 1) return '';
+    return d < 0 ? `<span class="sim-d down">${tl(-d)} TL daha ucuz</span>` : `<span class="sim-d up">${tl(d)} TL daha pahalı</span>`;
+  };
+  return `<section class="similar">
+    <style>
+      .similar .sim{display:flex;gap:14px;justify-content:space-between;align-items:flex-start;background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;margin-bottom:10px;text-decoration:none;color:inherit}
+      .similar .sim:hover{border-color:var(--signal)}
+      .similar .sim-n{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:15.5px;line-height:1.3}
+      .similar .sim-s{font-size:12.5px;color:var(--muted);margin-top:4px;line-height:1.5}
+      .similar .sim-p{font-family:'IBM Plex Mono',monospace;font-weight:600;font-size:15px;text-align:right;white-space:nowrap}
+      .similar .sim-d{display:block;font-family:'Inter',sans-serif;font-size:11.5px;font-weight:600;margin-top:3px}
+      .similar .down{color:var(--deal)} .similar .up{color:var(--muted)}
+    </style>
+    <h2>${selfInStock ? 'Benzer ürünler' : 'Stokta olan alternatifler'}</h2>
+    ${list.map(e => `<a class="sim" href="${frontendUrl}/urun/${e.id}/${slugify(e.name)}">
+      <div><div class="sim-n">${esc(displayModelName(e.name))}</div><div class="sim-s">${esc(specLine(e))}</div></div>
+      <div class="sim-p">${fmtTL(e.price)}${diff(e)}</div></a>`).join('')}
+  </section>`;
+}
+
+module.exports = { buildCatalog, renderGuidePage, renderHubPage, toEntry, findSimilar, renderSimilarSection };

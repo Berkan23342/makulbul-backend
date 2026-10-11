@@ -33,7 +33,7 @@ const { parsePriceFilter } = require('./price-filter');
 const { foldTurkish } = require('./text-normalize');
 const { parseQueryWithAI } = require('./ai-query-fallback');
 const { renderProductPage, renderNotFoundPage, slugify } = require('./product-page');
-const { buildCatalog, renderGuidePage, renderHubPage } = require('./seo-pages');
+const { buildCatalog, renderGuidePage, renderHubPage, toEntry, findSimilar, renderSimilarSection } = require('./seo-pages');
 const { createRateLimiter } = require('./rate-limit');
 
 // Ürün detay sayfalarının (SSR) ve sitemap'in mutlak URL üretmesi için.
@@ -1874,7 +1874,16 @@ app.get('/urun/:id/:slug?', async (req, res) => {
       return res.status(404).type('html').send(renderNotFoundPage(FRONTEND_URL));
     }
     const [product] = await attachOffers(rows);
+    // Benzer ürünler: katalog önbelleğinden; hata olursa sayfa bunsuz da çalışır.
+    let similarHtml = '';
+    try {
+      const { entries } = await getSeoCatalog();
+      const selfLive = toEntry(product);
+      const self = selfLive || toEntry(product, { includeOutOfStock: true });
+      similarHtml = renderSimilarSection(findSimilar(entries, self), self, { frontendUrl: FRONTEND_URL, selfInStock: !!selfLive });
+    } catch (e) { console.error('benzer ürünler atlandı:', e.message); }
     res.type('html').send(renderProductPage(product, {
+      similarHtml,
       backendUrl: BACKEND_URL,
       frontendUrl: FRONTEND_URL,
       minPrice30d: product.min_price_30d,
@@ -1890,7 +1899,7 @@ app.get('/urun/:id/:slug?', async (req, res) => {
 // seo-pages.js). Katalog ürün/stok verisinden hesaplanır; 10 dk önbellekte
 // tutulur (fiyat/stok güncellemesi en geç 10 dk içinde sayfalara yansır).
 // ---------------------------------------------------------------------
-let seoCache = { at: 0, pages: [], lastChecked: null };
+let seoCache = { at: 0, pages: [], entries: [], lastChecked: null };
 async function getSeoCatalog() {
   if (Date.now() - seoCache.at < 10 * 60 * 1000 && seoCache.pages.length) return seoCache;
   const { rows } = await pool.query(
@@ -1900,7 +1909,7 @@ async function getSeoCatalog() {
   );
   const withOffers = await attachOffers(rows);
   const { rows: lc } = await pool.query(`SELECT MAX(last_checked_at) AS t FROM offers WHERE in_stock = true`);
-  seoCache = { at: Date.now(), pages: buildCatalog(withOffers), lastChecked: lc[0].t ? new Date(lc[0].t) : null };
+  seoCache = { at: Date.now(), pages: buildCatalog(withOffers), entries: withOffers.map(p => toEntry(p)).filter(Boolean), lastChecked: lc[0].t ? new Date(lc[0].t) : null };
   return seoCache;
 }
 

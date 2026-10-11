@@ -304,7 +304,7 @@ ${renderNav(frontendUrl)}
 </body></html>`;
 }
 
-function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d }) {
+function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d, similarHtml = '' }) {
   const isLaptop = product.category === 'laptop';
   const activeSpecLabels = isLaptop ? LAPTOP_SPEC_LABELS : SPEC_LABELS;
   const specs = product.specs || {};
@@ -509,6 +509,7 @@ ${renderNav(frontendUrl)}
       <p class="muted">Fiyat geçmişi yükleniyor…</p>
     </div>
   </section>
+${similarHtml}
 </main>
 
 <script>
