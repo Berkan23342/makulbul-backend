@@ -744,4 +744,4 @@ ${renderNav(frontendUrl)}
 </html>`;
 }
 
-module.exports = { renderProductPage, renderNotFoundPage, slugify };
+module.exports = { renderProductPage, renderNotFoundPage, slugify, PAGE_STYLE, FAVICON_LINK, renderNav, esc, fmtTL, displayModelName, formatGb };

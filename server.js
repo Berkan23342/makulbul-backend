@@ -33,6 +33,7 @@ const { parsePriceFilter } = require('./price-filter');
 const { foldTurkish } = require('./text-normalize');
 const { parseQueryWithAI } = require('./ai-query-fallback');
 const { renderProductPage, renderNotFoundPage, slugify } = require('./product-page');
+const { buildCatalog, renderGuidePage, renderHubPage } = require('./seo-pages');
 const { createRateLimiter } = require('./rate-limit');
 
 // Ürün detay sayfalarının (SSR) ve sitemap'in mutlak URL üretmesi için.
@@ -1885,6 +1886,53 @@ app.get('/urun/:id/:slug?', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------
+// /en-iyi ve /en-iyi/:slug — bütçe/özellik/marka rehber sayfaları (bkz.
+// seo-pages.js). Katalog ürün/stok verisinden hesaplanır; 10 dk önbellekte
+// tutulur (fiyat/stok güncellemesi en geç 10 dk içinde sayfalara yansır).
+// ---------------------------------------------------------------------
+let seoCache = { at: 0, pages: [], lastChecked: null };
+async function getSeoCatalog() {
+  if (Date.now() - seoCache.at < 10 * 60 * 1000 && seoCache.pages.length) return seoCache;
+  const { rows } = await pool.query(
+    `SELECT p.id, p.canonical_name, b.name AS brand, p.specs, c.slug AS category
+     FROM products p JOIN brands b ON b.id = p.brand_id JOIN categories c ON c.id = p.category_id
+     WHERE c.slug IN ('telefon', 'laptop')`
+  );
+  const withOffers = await attachOffers(rows);
+  const { rows: lc } = await pool.query(`SELECT MAX(last_checked_at) AS t FROM offers WHERE in_stock = true`);
+  seoCache = { at: Date.now(), pages: buildCatalog(withOffers), lastChecked: lc[0].t ? new Date(lc[0].t) : null };
+  return seoCache;
+}
+
+app.get('/en-iyi', async (req, res) => {
+  try {
+    const { pages } = await getSeoCatalog();
+    res.set('Cache-Control', 'public, max-age=300');
+    res.type('html').send(renderHubPage(pages, { frontendUrl: FRONTEND_URL }));
+  } catch (err) {
+    console.error(err);
+    res.status(500).type('html').send('<h1>Bir hata oluştu</h1>');
+  }
+});
+
+app.get('/en-iyi/:slug', async (req, res) => {
+  try {
+    const { pages, lastChecked } = await getSeoCatalog();
+    const page = pages.find(p => p.slug === req.params.slug);
+    if (!page) {
+      return res.status(404).type('html').send(renderNotFoundPage(FRONTEND_URL, {
+        title: 'Rehber bulunamadı', message: 'Bu liste şu an yayında değil (stokta yeterli ürün olmayabilir).',
+      }));
+    }
+    res.set('Cache-Control', 'public, max-age=300');
+    res.type('html').send(renderGuidePage(page, { pages, frontendUrl: FRONTEND_URL, lastChecked }));
+  } catch (err) {
+    console.error(err);
+    res.status(500).type('html').send('<h1>Bir hata oluştu</h1>');
+  }
+});
+
+// ---------------------------------------------------------------------
 // GET /sitemap.xml ve GET /robots.txt — arama motorlarının tüm ürün
 // sayfalarını keşfedebilmesi için. Katalog tamamen JS ile render
 // olduğundan botlar ürün linklerini anasayfadan takip edemeyebilir;
@@ -1913,7 +1961,14 @@ app.get('/sitemap.xml', async (req, res) => {
     // Stokta hiç teklifi olmayan ürünler bilerek listelenmiyor: satılamayan
     // ürün sayfaları Google'da "ince içerik" sayılıyor. Stok geri gelince
     // sitemap'e otomatik geri döner.
-    const staticPages = ['hakkimizda', 'iletisim'].map(pg =>
+    let guideUrls = '';
+    try {
+      const { pages } = await getSeoCatalog();
+      guideUrls = ['en-iyi', ...pages.map(p => 'en-iyi/' + p.slug)].map(pg =>
+        `  <url><loc>${FRONTEND_URL}/${pg}</loc><changefreq>daily</changefreq><priority>0.7</priority></url>`
+      ).join('\n') + '\n';
+    } catch (e) { console.error('sitemap rehber sayfaları atlandı:', e.message); }
+    const staticPages = guideUrls + ['hakkimizda', 'iletisim'].map(pg =>
       `  <url><loc>${FRONTEND_URL}/${pg}</loc><changefreq>monthly</changefreq><priority>0.3</priority></url>`
     ).join('\n');
     const urls = rows.map(p =>
