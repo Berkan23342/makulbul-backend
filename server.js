@@ -33,6 +33,7 @@ const { parsePriceFilter } = require('./price-filter');
 const { foldTurkish } = require('./text-normalize');
 const { parseQueryWithAI } = require('./ai-query-fallback');
 const { isOffTopicQuery } = require('./query-relevance');
+const { narrowByModelFamily } = require('./model-family');
 const { renderProductPage, renderNotFoundPage, slugify } = require('./product-page');
 const { buildCatalog, renderGuidePage, renderHubPage, toEntry, findSimilar, renderSimilarSection } = require('./seo-pages');
 const { createRateLimiter } = require('./rate-limit');
@@ -768,10 +769,15 @@ async function handleLaptopAiSearch(req, res) {
     }
 
     let pool_ = candidates;
+    let familyTokens = null;
     if (exactMatch) {
       pool_ = [exactMatch];
     } else {
-      pool_ = candidates.filter(c => c.best_price !== null);
+      // Model ailesi adıyla arandıysa ("katana", "zenbook 14") havuzu o aileyle sınırla
+      // (bkz. model-family.js); aile bulunamazsa eski davranış.
+      const family = narrowByModelFamily(candidates, q);
+      if (family) { pool_ = family.pool; familyTokens = family.tokens; }
+      else pool_ = candidates.filter(c => c.best_price !== null);
     }
 
     // Sayısal eşikler (RAM/depolama/pil/ekran/ağırlık/çekirdek/Hz) —
@@ -888,6 +894,7 @@ async function handleLaptopAiSearch(req, res) {
       // doldurduğu numericThresholds/filters üzerinden) eklenmeye devam ediyor.
       if (usedAIQueryFallback) reasons.push('Yapay zeka destekli sorgu analizi kullanıldı');
       if (exactMatch) reasons.push('Aradığın model bulundu');
+      else if (familyTokens) reasons.push(`Aradığın model ailesi: ${familyTokens.join(' ')}`);
       if (filters.maxPrice && filters.minPrice) {
         const rangeLabel = `${filters.minPrice.toLocaleString('tr-TR')}-${filters.maxPrice.toLocaleString('tr-TR')} TL`;
         reasons.push(budgetUnmet
@@ -1466,6 +1473,7 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
     }
 
     let pool_ = candidates;
+    let familyTokens = null;
     if (exactMatch) {
       // İsimle arandığında satışta olmasa bile bulunan ÜRÜNÜN KENDİSİ
       // gösteriliyor — aşağıda best_price null ise "satışta değil"
@@ -1476,7 +1484,11 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
       // sorgularda satışta olmayan ürünler öneri havuzuna hiç girmiyor
       // — kullanıcı özellikle istemediği sürece satın alınamayacak bir
       // şeyi önermek yanlış olur.
-      pool_ = candidates.filter(c => c.best_price !== null);
+      // Model ailesi adıyla arandıysa ("katana", "zenbook 14") havuzu o aileyle sınırla
+      // (bkz. model-family.js); aile bulunamazsa eski davranış.
+      const family = narrowByModelFamily(candidates, q);
+      if (family) { pool_ = family.pool; familyTokens = family.tokens; }
+      else pool_ = candidates.filter(c => c.best_price !== null);
     }
 
     // Sayısal eşikler (RAM/depolama/pil/kamera MP/ekran/ağırlık/şarj/
@@ -1660,6 +1672,7 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
       // devreye giren AI yedek yolu kullanıldıysa dürüstçe belirt.
       if (usedAIQueryFallback) reasons.push('Yapay zeka destekli sorgu analizi kullanıldı');
       if (exactMatch) reasons.push('Aradığın model bulundu');
+      else if (familyTokens) reasons.push(`Aradığın model ailesi: ${familyTokens.join(' ')}`);
       if (filters.maxPrice && filters.minPrice) {
         const rangeLabel = `${filters.minPrice.toLocaleString('tr-TR')}-${filters.maxPrice.toLocaleString('tr-TR')} TL`;
         reasons.push(budgetUnmet
