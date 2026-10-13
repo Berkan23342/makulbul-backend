@@ -1,10 +1,11 @@
 import { IBMPlexMono_500Medium, IBMPlexMono_600SemiBold } from '@expo-google-fonts/ibm-plex-mono';
 import { Inter_400Regular, Inter_500Medium, Inter_600SemiBold } from '@expo-google-fonts/inter';
 import { SpaceGrotesk_600SemiBold, SpaceGrotesk_700Bold, useFonts } from '@expo-google-fonts/space-grotesk';
-import { Stack } from 'expo-router';
+import { DarkTheme, Stack, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
+import { View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { FavoritesProvider, ProductsProvider } from '../lib/store';
 import { colors, fonts } from '../theme';
@@ -18,9 +19,10 @@ export default function RootLayout() {
     IBMPlexMono_500Medium, IBMPlexMono_600SemiBold,
   });
   useEffect(() => { if (loaded) SplashScreen.hideAsync().catch(() => {}); }, [loaded]);
-  if (!loaded) return null;
+  if (!loaded) return <View style={{ flex: 1, backgroundColor: colors.bg }} />;
 
   return (
+    <ThemeProvider value={{ ...DarkTheme, colors: { ...DarkTheme.colors, background: colors.bg, card: colors.bg, border: colors.border, primary: colors.deal, text: colors.text } }}>
     <SafeAreaProvider>
       <ProductsProvider>
         <FavoritesProvider>
@@ -40,5 +42,6 @@ export default function RootLayout() {
         </FavoritesProvider>
       </ProductsProvider>
     </SafeAreaProvider>
+    </ThemeProvider>
   );
 }

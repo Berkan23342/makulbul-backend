@@ -15,7 +15,8 @@
         "LSApplicationQueriesSchemes": [
           "https"
         ]
-      }
+      },
+      "backgroundColor": "#0a0a0e"
     },
     "android": {
       "package": "com.makulbul.app",
@@ -26,7 +27,8 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "backgroundColor": "#0a0a0e"
     },
     "web": {
       "favicon": "./assets/favicon.png"
@@ -38,7 +40,11 @@
         {
           "image": "./assets/splash-icon.png",
           "backgroundColor": "#0a0a0e",
-          "imageWidth": 200
+          "imageWidth": 220,
+          "dark": {
+            "image": "./assets/splash-icon.png",
+            "backgroundColor": "#0a0a0e"
+          }
         }
       ],
       "expo-font"
@@ -50,6 +56,11 @@
     },
     "extra": {
       "apiBase": "https://makulbul.com"
+    },
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0a0e"
     }
   }
 }
