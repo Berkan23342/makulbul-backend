@@ -417,7 +417,6 @@
       <a href="en-iyi">Rehberler</a>
       <a href="hakkimizda">Hakkımızda</a>
       <a href="iletisim">İletişim</a>
-      <a href="#contact">İletişim</a>
     </nav>
     <div class="nav-right">
       <a class="nav-cta" href="#catalog" id="navCta">Telefon Bul</a>
@@ -429,8 +428,9 @@
   <div class="nav-mobile" id="navMobile" role="navigation" aria-label="Mobil menü">
     <a href="#catalog">Katalog</a>
     <a href="#how">Nasıl Çalışır</a>
-    <a href="#about">Hakkımızda</a>
-    <a href="#contact">İletişim</a>
+    <a href="en-iyi">Rehberler</a>
+    <a href="hakkimizda">Hakkımızda</a>
+    <a href="iletisim">İletişim</a>
   </div>
 </header>
 
@@ -899,6 +899,31 @@ function sortPhones(list){
   return l;
 }
 
+// Aynı satırdaki kartları EN YÜKSEK olanın yüksekliğine eşitler (fiyat bloğu margin-top:auto ile hep
+// alta oturur). align-items:start bilerek korunuyor: bir kartın "Satıcılar" listesi açılınca yalnızca o kart
+// uzar, komşuları gerilmez.
+function equalizeCardHeights(){
+  const grid = document.getElementById('grid');
+  if(!grid) return;
+  const cards = [...grid.querySelectorAll('.card')];
+  cards.forEach(c => { c.style.minHeight = ''; });
+  const rows = new Map();
+  cards.forEach(c => {
+    if(!c.offsetParent) return;
+    const top = Math.round(c.offsetTop);
+    if(!rows.has(top)) rows.set(top, []);
+    rows.get(top).push(c);
+  });
+  rows.forEach(list => {
+    const max = Math.max(...list.map(c => c.offsetHeight));
+    list.forEach(c => { c.style.minHeight = max + 'px'; });
+  });
+}
+let _eqTimer = null;
+function scheduleEqualize(){ clearTimeout(_eqTimer); _eqTimer = setTimeout(equalizeCardHeights, 60); }
+window.addEventListener('resize', scheduleEqualize);
+if(document.fonts && document.fonts.ready) document.fonts.ready.then(scheduleEqualize);
+
 function renderGrid(overrideList){
   const grid = document.getElementById('grid');
   let list;
@@ -915,6 +940,7 @@ function renderGrid(overrideList){
         ? '<p class="empty-state">Henüz favori ürünün yok — bir ürünün üzerindeki kalp ikonuna basarak ekleyebilirsin.</p>'
         : '<p class="empty-state">Bu kritere uyan ürün bulunamadı.</p>');
   if(!list.length) return;
+  requestAnimationFrame(equalizeCardHeights);
 
   list.forEach(p=>{
     const toggle = document.getElementById('toggle-'+p.id);
@@ -1220,7 +1246,7 @@ function selectCardVariant(p, storageGb, color){
     const sellerNone = document.getElementById('seller-line-'+p.id);
     if (sellerNone) sellerNone.textContent = '';
     const lowestNone = document.getElementById('lowest-badge-'+p.id);
-    if (lowestNone) lowestNone.style.display = 'none';
+    if (lowestNone) lowestNone.style.visibility = 'hidden';
     const countNone = document.getElementById('offers-count-'+p.id);
     if (countNone) countNone.textContent = `Satıcılar (${activeOffers.length})`;
     const listNone = document.getElementById('offers-'+p.id);
@@ -1240,7 +1266,7 @@ function selectCardVariant(p, storageGb, color){
   const lowestEl = document.getElementById('lowest-badge-'+p.id);
   if (lowestEl) {
     const isLowest = p.minPrice30d != null && best.price <= p.minPrice30d + 0.5;
-    lowestEl.style.display = isLowest ? '' : 'none';
+    lowestEl.style.visibility = isLowest ? '' : 'hidden';
   }
 
   const pillsEl = document.getElementById('storage-pills-'+p.id);
@@ -1335,7 +1361,7 @@ function cardHTML(p){
         <span class="price" id="price-${p.id}">${fmt(best.price)}</span>
         <span class="best-tag">En uygun</span>
       </div>
-      <div class="lowest-badge" id="lowest-badge-${p.id}"${isLowestIn30d ? '' : ' style="display:none"'}>${ICON_LOWEST}<span>Son 30 günün en düşük fiyatı</span></div>
+      <div class="lowest-badge" id="lowest-badge-${p.id}"${isLowestIn30d ? '' : ' style="visibility:hidden" aria-hidden="true"'}>${ICON_LOWEST}<span>Son 30 günün en düşük fiyatı</span></div>
       <div class="seller-line" id="seller-line-${p.id}">${escHtml(best.seller)} üzerinden <span class="ad-tag">Reklam</span></div>
       <div class="card-actions">
         <button class="card-action" id="toggle-${p.id}">${ICON_STORE}<span id="offers-count-${p.id}">Satıcılar (${activeOffers.length})</span></button>
