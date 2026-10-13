@@ -32,6 +32,7 @@ const {
 const { parsePriceFilter } = require('./price-filter');
 const { foldTurkish } = require('./text-normalize');
 const { parseQueryWithAI } = require('./ai-query-fallback');
+const { isOffTopicQuery } = require('./query-relevance');
 const { renderProductPage, renderNotFoundPage, slugify } = require('./product-page');
 const { buildCatalog, renderGuidePage, renderHubPage, toEntry, findSimilar, renderSimilarSection } = require('./seo-pages');
 const { createRateLimiter } = require('./rate-limit');
@@ -630,6 +631,22 @@ async function handleLaptopAiSearch(req, res) {
         if (aiResult.minPrice != null) filters.minPrice = aiResult.minPrice;
         if (aiResult.brand) filters.brand = aiResult.brand;
         for (const key of aiResult.softFilters) filters[key] = true;
+      }
+    }
+
+
+    // İLGİSİZ SORGU KAPISI (bkz. query-relevance.js): kriter bulunamadı (yapay zeka
+    // yedeği dahil) VE sorguda hiçbir telefon/laptop/alışveriş sinyali yok →
+    // rastgele bir ürün önermek yerine dürüstçe "anlayamadım" de.
+    {
+      const criteriaNow = Object.keys(numericThresholds).length > 0 || 
+        Object.entries(filters).some(([k, v]) => (['maxPrice', 'minPrice', 'brand'].includes(k) ? v != null : v === true));
+      if (await isOffTopicQuery(pool, req.body.query, 'laptop', { hasCriteria: criteriaNow })) {
+        return res.json({
+          pick: null, reasons: [], candidates: [],
+          message: 'Bu aramayı anlayamadım',
+          hints: ['Makulbul telefon ve laptop için çalışır', 'Örnek: "oyun için 50.000 TL altı laptop"'],
+        });
       }
     }
 
@@ -1259,6 +1276,22 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
         if (aiResult.minPrice != null) filters.minPrice = aiResult.minPrice;
         if (aiResult.brand) filters.brand = aiResult.brand;
         for (const key of aiResult.softFilters) filters[key] = true;
+      }
+    }
+
+
+    // İLGİSİZ SORGU KAPISI (bkz. query-relevance.js): kriter bulunamadı (yapay zeka
+    // yedeği dahil) VE sorguda hiçbir telefon/laptop/alışveriş sinyali yok →
+    // rastgele bir ürün önermek yerine dürüstçe "anlayamadım" de.
+    {
+      const criteriaNow = Object.keys(numericThresholds).length > 0 || subBrandPrefix != null ||
+        Object.entries(filters).some(([k, v]) => (['maxPrice', 'minPrice', 'brand'].includes(k) ? v != null : v === true));
+      if (await isOffTopicQuery(pool, req.body.query, 'telefon', { hasCriteria: criteriaNow })) {
+        return res.json({
+          pick: null, reasons: [], candidates: [],
+          message: 'Bu aramayı anlayamadım',
+          hints: ['Makulbul telefon ve laptop için çalışır', 'Örnek: "NFC\'li 20.000 TL altı telefon"'],
+        });
       }
     }
 

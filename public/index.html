@@ -1399,8 +1399,11 @@ async function runAISearch(q){
       // önceden kutu sessizce gizleniyordu, kullanıcı aramanın çalışıp
       // çalışmadığını hiç anlayamıyordu. Şimdi dürüstçe "bulunamadı"
       // mesajı gösteriliyor.
-      document.getElementById('aiPickName').textContent = `Bu kriterlere uyan bir ${CATEGORY_CONFIG[currentCategory].notFoundLabel} bulunamadı`;
-      document.getElementById('aiPickReasons').innerHTML = '<li>Farklı bir bütçe veya özellik kombinasyonu dene</li>';
+      // Sunucu "anlayamadım" (telefon/laptop ile ilgisiz sorgu) derse kendi mesajını gönderir.
+      document.getElementById('aiPickName').textContent = data.message || `Bu kriterlere uyan bir ${CATEGORY_CONFIG[currentCategory].notFoundLabel} bulunamadı`;
+      document.getElementById('aiPickReasons').innerHTML = Array.isArray(data.hints) && data.hints.length
+        ? data.hints.map(t => `<li>${escHtml(t)}</li>`).join('')
+        : '<li>Farklı bir bütçe veya özellik kombinasyonu dene</li>';
       cta.style.display = 'none';
       aiPickBox.classList.add('show');
       return;
