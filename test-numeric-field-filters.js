@@ -20,9 +20,29 @@ check(
   { min: 8, max: null }
 );
 check(
-  'Çıplak "16GB RAM\'li telefon" -> eşik YOK (varyant eşleşmesini bozmamalı)',
+  '"16GB RAM\'li telefon" (anahtar kelime yanında, yön yok) -> en az 16 GB',
   parseFieldThreshold("16gb ram'li telefon", fieldByKey(PHONE_NUMERIC_FIELDS, 'ram_gb')),
+  { min: 16, max: null }
+);
+check(
+  '"16 gb ram laptop" -> en az 16 GB RAM',
+  parseFieldThreshold('16 gb ram laptop', fieldByKey(LAPTOP_NUMERIC_FIELDS, 'ram_gb')),
+  { min: 16, max: null }
+);
+check(
+  'Anahtar kelimesiz çıplak "ThinkPad E14 Gen 7 32GB" -> eşik YOK (varyant eşleşmesini bozmamalı)',
+  parseFieldThreshold('thinkpad e14 gen 7 32gb', fieldByKey(LAPTOP_NUMERIC_FIELDS, 'ram_gb')),
   null
+);
+check(
+  '"512gb ssd" -> en az 512 GB depolama; RAM eşiği üretmemeli',
+  [parseFieldThreshold('512gb ssd laptop', fieldByKey(LAPTOP_NUMERIC_FIELDS, 'storage_gb')), parseFieldThreshold('512gb ssd laptop', fieldByKey(LAPTOP_NUMERIC_FIELDS, 'ram_gb'))],
+  [{ min: 512, max: null }, null]
+);
+check(
+  '"16gb ram 512gb ssd" -> RAM en az 16, depolama en az 512 (çapraz sızıntı yok)',
+  [parseFieldThreshold('16gb ram 512gb ssd laptop', fieldByKey(LAPTOP_NUMERIC_FIELDS, 'ram_gb')), parseFieldThreshold('16gb ram 512gb ssd laptop', fieldByKey(LAPTOP_NUMERIC_FIELDS, 'storage_gb'))],
+  [{ min: 16, max: null }, { min: 512, max: null }]
 );
 check(
   '"programlama" içindeki "ram" RAM eşleşmesini YANLIŞ tetiklemiyor',
@@ -142,12 +162,12 @@ check(
 check(
   'Çapraz-alan sızıntısı: fiyat cümlesindeki "altı" RAM\'e sızmamalı ("30 bin altı 8gb ram telefon")',
   parseFieldThreshold('30 bin altı 8gb ram telefon', fieldByKey(PHONE_NUMERIC_FIELDS, 'ram_gb')),
-  null
+  { min: 8, max: null }   // "altı" (fiyat) RAM'e max olarak SIZMAMALI; çıplak "8gb ram" -> en az 8
 );
 check(
   'Aynı çapraz-alan riski depolama için de yok: "30 bin altı 512gb depolamalı telefon"',
   parseFieldThreshold('30 bin altı 512gb depolamalı telefon', fieldByKey(PHONE_NUMERIC_FIELDS, 'storage_gb')),
-  null
+  { min: 512, max: null }  // "altı" (fiyat) depolamaya max olarak SIZMAMALI; çıplak "512gb depolama" -> en az 512
 );
 check(
   'Prefix kelime hâlâ doğru yakalanıyor (aynı riskli komşulukta): "30 bin altı en az 8gb ram\'li telefon"',

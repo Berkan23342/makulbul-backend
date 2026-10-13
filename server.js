@@ -504,6 +504,8 @@ async function handleLaptopAiSearch(req, res) {
       smallScreen: q.includes('kucuk ekran') || q.includes('mini ekran'),
       highRefreshRate: /120\s*hz|144\s*hz|165\s*hz|180\s*hz|yuksek yenileme|akici ekran/.test(q),
       touchscreen: q.includes('dokunmatik'),
+      // OLED yalnızca ürün ADINDA yazıyor (specs'te panel tipi alanı yok) — bkz. aşağıdaki koşul.
+      oled: q.includes('oled'),
       backlitKeyboard: q.includes('aydinlatmali klavye') || q.includes('arkadan aydinlatma'),
       fingerprint: q.includes('parmak izi'),
       goodWebcam: q.includes('iyi webcam') || q.includes('kaliteli webcam') || q.includes('yuksek cozunurluklu webcam') || q.includes('goruntulu gorusme'),
@@ -655,6 +657,7 @@ async function handleLaptopAiSearch(req, res) {
     const params = [];
     if (filters.brand) { params.push(filters.brand); conditions.push(`b.name = $${params.length}`); }
     if (filters.touchscreen) conditions.push(`(p.specs->>'has_touchscreen')::boolean = ${negated ? 'false' : 'true'}`);
+    if (filters.oled) conditions.push(`p.canonical_name ${negated ? 'NOT ILIKE' : 'ILIKE'} '%oled%'`);
     if (filters.backlitKeyboard) conditions.push(`(p.specs->>'has_backlit_keyboard')::boolean = ${negated ? 'false' : 'true'}`);
     if (filters.fingerprint) conditions.push(`(p.specs->>'has_fingerprint')::boolean = ${negated ? 'false' : 'true'}`);
     // refresh_rate_hz artık SQL'de değil, aşağıda numericThresholds ile
@@ -955,6 +958,7 @@ async function handleLaptopAiSearch(req, res) {
       // eşiğin KENDİSİ (max mı min mi) — negated'e değil ona bakılmalı.
       if (numericThresholds.refresh_rate_hz && numericThresholds.refresh_rate_hz.max != null && pick.specs.refresh_rate_hz != null) reasons.push(`Standart yenileme hızlı ekran: ${pick.specs.refresh_rate_hz}Hz`);
       else if (numericThresholds.refresh_rate_hz && pick.specs.refresh_rate_hz) reasons.push(`Yüksek yenileme hızlı, akıcı ekran: ${pick.specs.refresh_rate_hz}Hz`);
+      if (filters.oled && !negated && /oled/i.test(pick.canonical_name)) reasons.push('OLED ekranlı model');
       if (filters.touchscreen && negated) reasons.push('Dokunmatik ekran değil (istediğin gibi)');
       else if (filters.touchscreen && pick.specs.has_touchscreen) reasons.push('Dokunmatik ekran desteği var');
       if (filters.backlitKeyboard && negated) reasons.push('Aydınlatmalı klavyesi yok (istediğin gibi)');

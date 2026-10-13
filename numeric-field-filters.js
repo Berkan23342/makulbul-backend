@@ -5,12 +5,12 @@
 // yardımcı — hem telefon hem laptop AI arama motoru bunu kullanıyor.
 //
 // DİSİPLİN: yön kelimesi (üzeri/altı/en az/en fazla vb., ya da alana özel
-// ekleri) sorguda GERÇEKTEN yoksa hiçbir eşik döndürülmez. Bunun tek
-// istisnası refresh_rate_hz'nin "bare sayı" durumu (bkz. PHONE/LAPTOP_
-// NUMERIC_FIELDS'teki defaultDirectionIfBare) — laptop tarafında model-adı
-// eşleşmesi (server.js'teki exactMatches daraltma bloğu) ÇIPLAK "16GB"
-// gibi sayıları RAM/depolama VARYANT SEÇİMİ için kullanıyor; yön kelimesi
-// şartı olmadan bu iki mekanizma çakışırdı.
+// ekleri) sorguda yoksa eşik döndürülmez — İSTİSNALAR (defaultDirectionIfBare):
+// refresh_rate_hz ("144hz" -> en az 144) ve ram_gb/storage_gb, ANCAK ALAN
+// ANAHTAR KELİMESİ sayının hemen yanındaysa ("16gb ram", "512 ssd" -> en az).
+// Anahtar kelimesiz çıplak "16GB" ("ThinkPad E14 32GB") HİÇ eşik üretmez: laptop
+// tarafında model-adı eşleşmesi (server.js exactMatches bloğu) bu sayıları
+// RAM/depolama VARYANT SEÇİMİ için kullanıyor.
 
 const { foldTurkish } = require('./text-normalize');
 
@@ -172,12 +172,22 @@ function tryRange(query, field, group) {
   return { min: Math.min(a, b), max: Math.max(a, b) };
 }
 
+// Sayının (start..end) hemen ARKASINDA (<=9 karakter) ya da hemen ÖNÜNDE (<=6 karakter) alan anahtar
+// kelimesi var mı? Önündeki kelime, kendisinden önce başka bir sayıya (ör. "16gb ram 512gb") aitse sayılmaz.
+function keywordAdjacent(query, start, end, field) {
+  if (matchesKeyword(query.slice(end, end + 9), field.keywords)) return true;
+  const before = query.slice(Math.max(0, start - 6), start);
+  if (!matchesKeyword(before, field.keywords)) return false;
+  const beforeKeyword = query.slice(Math.max(0, start - 14), Math.max(0, start - 6));
+  return !/\d/.test(beforeKeyword);
+}
+
 // field: {
 //   keywords: (string|RegExp)[] | null,  // null/[] = anahtar gerekmez
 //   unitGroups: { tokens: string[], multiplier: number, style: 'decimal'|'grouped-integer' }[],
 //   extraOverWords?: string[], extraUnderWords?: string[],
 //   excludeIf?: string[],           // pencerede bu kelimelerden biri varsa eşleşme atlanır
-//   defaultDirectionIfBare?: 'min'|'max',  // yön kelimesi YOKSA bu varsayılan kullanılır (sadece refresh_rate_hz için)
+//   defaultDirectionIfBare?: 'min'|'max',  // yön kelimesi YOKSA bu varsayılan kullanılır (refresh_rate_hz ile anahtar kelimesi yanında olan ram_gb/storage_gb için)
 //   windowChars?: number (varsayılan 35),
 // }
 // Döndürür: { min, max } (biri null olabilir) ya da hiç eşik yoksa null.
@@ -212,7 +222,13 @@ function parseFieldThreshold(query, field) {
       if (excluded(windowText, field)) continue;
 
       let direction = findFieldDirection(query, m.index, m.index + m[0].length, field);
-      if (!direction && field.defaultDirectionIfBare) direction = field.defaultDirectionIfBare;
+      if (!direction && field.defaultDirectionIfBare) {
+        // ram_gb/storage_gb aynı "gb/tb" birimini paylaşır: çıplak sayıyı bir alana ancak o alanın
+        // anahtar kelimesi sayının HEMEN yanındaysa ata ("16gb ram", "ram 16gb", "512gb ssd").
+        // Geniş pencere "16gb ram 512gb ssd" cümlesinde 16'yı depolamaya da atardı.
+        if (field.bareNeedsAdjacentKeyword && !keywordAdjacent(query, m.index, m.index + m[0].length, field)) continue;
+        direction = field.defaultDirectionIfBare;
+      }
       if (!direction) continue;
 
       const value = parseAmount(m[1], group.multiplier, group.style);
@@ -328,6 +344,10 @@ const PHONE_NUMERIC_FIELDS = foldFieldTable([
     keywordWindow: GB_TB_KEYWORD_WINDOW,
     extraOverWords: ['yüksek', 'çok', 'bol', 'en az', 'asgari'],
     extraUnderWords: ['düşük', 'en fazla', 'azami'],
+    // Anahtar kelime (ram/depolama/ssd...) sayının hemen yanında zaten var; yön kelimesi
+    // yoksa "16GB RAM'li laptop" kullanıcının en az bu kadarını istediği anlamına gelir.
+    defaultDirectionIfBare: 'min',
+    bareNeedsAdjacentKeyword: true,
   },
   {
     // "hafıza" kelimesi KULLANILMAZ — mevcut microSD "hafıza kart(ı)"
@@ -338,6 +358,10 @@ const PHONE_NUMERIC_FIELDS = foldFieldTable([
     keywordWindow: GB_TB_KEYWORD_WINDOW,
     extraOverWords: ['yüksek', 'geniş', 'büyük', 'bol', 'çok', 'en az'],
     extraUnderWords: ['düşük', 'küçük', 'en fazla'],
+    // Anahtar kelime (ram/depolama/ssd...) sayının hemen yanında zaten var; yön kelimesi
+    // yoksa "16GB RAM'li laptop" kullanıcının en az bu kadarını istediği anlamına gelir.
+    defaultDirectionIfBare: 'min',
+    bareNeedsAdjacentKeyword: true,
   },
   {
     key: 'battery_mah',
@@ -428,6 +452,10 @@ const LAPTOP_NUMERIC_FIELDS = foldFieldTable([
     keywordWindow: GB_TB_KEYWORD_WINDOW,
     extraOverWords: ['yüksek', 'çok', 'bol', 'en az', 'asgari'],
     extraUnderWords: ['düşük', 'en fazla', 'azami'],
+    // Anahtar kelime (ram/depolama/ssd...) sayının hemen yanında zaten var; yön kelimesi
+    // yoksa "16GB RAM'li laptop" kullanıcının en az bu kadarını istediği anlamına gelir.
+    defaultDirectionIfBare: 'min',
+    bareNeedsAdjacentKeyword: true,
   },
   {
     key: 'storage_gb',
@@ -436,6 +464,10 @@ const LAPTOP_NUMERIC_FIELDS = foldFieldTable([
     keywordWindow: GB_TB_KEYWORD_WINDOW,
     extraOverWords: ['yüksek', 'geniş', 'büyük', 'bol', 'çok', 'en az'],
     extraUnderWords: ['düşük', 'küçük', 'en fazla'],
+    // Anahtar kelime (ram/depolama/ssd...) sayının hemen yanında zaten var; yön kelimesi
+    // yoksa "16GB RAM'li laptop" kullanıcının en az bu kadarını istediği anlamına gelir.
+    defaultDirectionIfBare: 'min',
+    bareNeedsAdjacentKeyword: true,
   },
   {
     key: 'battery_wh',
