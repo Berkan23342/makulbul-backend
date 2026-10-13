@@ -18,6 +18,9 @@ const GENERIC = new Set([
   'pro', 'plus', 'max', 'ultra', 'air', 'gen', 'gaming', 'lite', 'slim', 'book', 'mini', 'new', 'core', 'intel', 'amd', 'nvidia',
   'oled', 'amoled', 'fhd', 'qhd', 'wuxga', 'wqxga', 'ddr5', 'ddr4', 'ssd', 'freedos', 'windows', 'ubuntu', 'win11', 'dos',
   'laptop', 'notebook', 'bilgisayar', 'telefon', 'dizustu', 'ryzen', 'geforce', 'radeon', 'graphics', 'display', 'edition',
+  // özellik/bağlantı etiketleri: ürün adında bazı modellerde geçer ama bir MODEL AİLESİ değildir
+  // ("NFC'li telefon" -> adında NFC yazanlarla sınırlanmamalı)
+  'nfc', '5g', '4g', 'lte', 'wifi', 'esim', 'dual', 'sim', 'gb', 'tb', 'ram',
 ]);
 // Rakamdan sonra gelirse o rakam model numarası değil, ölçü birimidir ("16 gb", "144 hz").
 const UNIT_AFTER = /^(gb|tb|inc|inch|hz|w|mah|tl|bin|lira|ram|ssd|mp|kg)$/;
@@ -33,7 +36,7 @@ function narrowByModelFamily(candidates, foldedQuery) {
   const qw = words(foldedQuery);
   const chosen = [];
   qw.forEach((t, i) => {
-    if (t.length < 3 || /^\d+$/.test(t) || GENERIC.has(t) || !vocab.has(t)) return;
+    if (t.length < 3 || /^\d+$/.test(t) || /^\d+(gb|tb)$/.test(t) || GENERIC.has(t) || !vocab.has(t)) return;
     chosen.push(t);
     const next = qw[i + 1];
     if (next && /^\d{1,4}$/.test(next) && vocab.has(next) && !UNIT_AFTER.test(qw[i + 2] || '')) chosen.push(next);
