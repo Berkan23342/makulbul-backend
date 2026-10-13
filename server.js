@@ -779,6 +779,13 @@ async function handleLaptopAiSearch(req, res) {
       // Model ailesi adıyla arandıysa ("katana", "zenbook 14") havuzu o aileyle sınırla
       // (bkz. model-family.js); aile bulunamazsa eski davranış.
       const family = narrowByModelFamily(candidates, q);
+      if (family && family.outOfStock) {
+        return res.json({
+          pick: null, reasons: [], candidates: [],
+          message: `"${family.tokens.join(' ')}" şu an satışta değil`,
+          hints: ['Bu modelin stokta teklifi yok', 'Benzer bir model için özellik ya da bütçe yazmayı dene'],
+        });
+      }
       if (family) { pool_ = family.pool; familyTokens = family.tokens; }
       else pool_ = candidates.filter(c => c.best_price !== null);
     }
@@ -1491,6 +1498,13 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
       // Model ailesi adıyla arandıysa ("katana", "zenbook 14") havuzu o aileyle sınırla
       // (bkz. model-family.js); aile bulunamazsa eski davranış.
       const family = narrowByModelFamily(candidates, q);
+      if (family && family.outOfStock) {
+        return res.json({
+          pick: null, reasons: [], candidates: [],
+          message: `"${family.tokens.join(' ')}" şu an satışta değil`,
+          hints: ['Bu modelin stokta teklifi yok', 'Benzer bir model için özellik ya da bütçe yazmayı dene'],
+        });
+      }
       if (family) { pool_ = family.pool; familyTokens = family.tokens; }
       else pool_ = candidates.filter(c => c.best_price !== null);
     }

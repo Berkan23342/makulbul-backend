@@ -8,8 +8,8 @@
 //
 // KURAL (muhafazakâr): sorgudaki ayırt edici kelime(ler) katalogdaki ürün adlarında
 // geçiyorsa havuz o kelimelerin HEPSİNİ içeren ürünlerle sınırlanır. Hiçbir ürün
-// stokta değilse ya da daraltma hiçbir şeyi daraltmıyorsa (ör. yalnızca marka adı)
-// null döner ve eski davranış aynen sürer.
+// stokta değilse { outOfStock: true } döner (çağıran "şu an satışta değil" der); daraltma hiçbir
+// şeyi daraltmıyorsa (ör. yalnızca marka adı) null döner ve eski davranış aynen sürer.
 
 const { foldTurkish } = require('./text-normalize');
 
@@ -42,9 +42,12 @@ function narrowByModelFamily(candidates, foldedQuery) {
 
   const narrowed = candidates.filter((c, i) => chosen.every(t => nameSets[i].has(t)));
   if (!narrowed.length || narrowed.length === candidates.length) return null;
+  const tokens = [...new Set(chosen)];
   const inStock = narrowed.filter(c => c.best_price !== null);
-  if (!inStock.length) return null;
-  return { pool: inStock, tokens: [...new Set(chosen)] };
+  // Aile katalogda VAR ama hiçbiri satışta değil: başka bir aileden "en ucuz" ürünü sunmak
+  // (ör. zenbook -> Dell) yanıltıcı olur; çağıran taraf dürüstçe "şu an satışta değil" der.
+  if (!inStock.length) return { pool: [], tokens, outOfStock: true };
+  return { pool: inStock, tokens };
 }
 
 module.exports = { narrowByModelFamily };
