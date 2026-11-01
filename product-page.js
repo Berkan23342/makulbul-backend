@@ -510,6 +510,13 @@ ${renderNav(frontendUrl)}
     </div>
   </section>
 ${similarHtml}
+  <section class="guide-links">
+    <h2>${isLaptop ? 'Laptop rehberleri' : 'Telefon rehberleri'}</h2>
+    <p>${(isLaptop
+      ? [['40000-tl-alti-laptop','40.000 TL altı laptop'],['60000-tl-alti-laptop','60.000 TL altı laptop'],['oyun-laptopu','Oyun laptopu'],['hafif-laptop','Hafif laptop'],['','Tüm rehberler']]
+      : [['30000-tl-alti-telefon','30.000 TL altı telefon'],['50000-tl-alti-telefon','50.000 TL altı telefon'],['uzun-pilli-telefon','Uzun pilli telefon'],['apple-telefon-fiyatlari','Apple telefon fiyatları'],['','Tüm rehberler']]
+    ).map(([slug, label]) => `<a href="${frontendUrl}/en-iyi${slug ? '/' + slug : ''}" style="display:inline-block;margin:0 8px 8px 0;padding:8px 13px;border:1px solid var(--border);border-radius:999px;font-size:13px;text-decoration:none;color:inherit">${label}</a>`).join('')}</p>
+  </section>
 </main>
 
 <script>
@@ -595,6 +602,7 @@ ${similarHtml}
   // engelleniyordu. window.load + kısa gecikme + sendBeacon bunu çözüyor.
   window.addEventListener('load', function(){
     setTimeout(function(){
+      try{var q=new URLSearchParams(location.search).get('ben');if(q==='1')localStorage.setItem('mk_owner','1');else if(q==='0')localStorage.removeItem('mk_owner');if(localStorage.getItem('mk_owner')==='1')return;}catch(e){}
       var payload = JSON.stringify({ path: location.pathname, ref: (function(){ try { return new URL(document.referrer).hostname; } catch (e) { return ''; } })(), utm: new URLSearchParams(location.search).get('utm_source') || '' });
       try {
         if (navigator.sendBeacon) {

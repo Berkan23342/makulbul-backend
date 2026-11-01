@@ -149,6 +149,7 @@ const GUIDE_STYLE = `
 const CSP_META = `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'">`;
 const VISIT_SCRIPT = `<script>
 window.addEventListener('load',function(){setTimeout(function(){
+  try{var q=new URLSearchParams(location.search).get('ben');if(q==='1')localStorage.setItem('mk_owner','1');else if(q==='0')localStorage.removeItem('mk_owner');if(localStorage.getItem('mk_owner')==='1')return;}catch(e){}
   var payload=JSON.stringify({path:location.pathname,ref:(function(){try{return new URL(document.referrer).hostname}catch(e){return ''}})(),utm:new URLSearchParams(location.search).get('utm_source')||''});
   try{if(navigator.sendBeacon){navigator.sendBeacon('/api/visit',new Blob([payload],{type:'application/json'}))}else{fetch('/api/visit',{method:'POST',headers:{'Content-Type':'application/json'},body:payload,keepalive:true}).catch(function(){})}}catch(e){}
 },800)});
