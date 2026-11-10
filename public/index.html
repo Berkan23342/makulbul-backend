@@ -301,6 +301,8 @@
   .offers-list.open{display:flex}
   .offer-item{font-size:12.5px;background:var(--bg);padding:9px 11px;border-radius:8px;color:var(--text)}
   .offer-item-out{opacity:.55}
+  .fresh-note{font-size:11px;color:var(--muted);margin:2px 0 4px}
+  .fresh-note.stale{color:#e0a43a}
   .stock-badge{font-size:9.5px;font-weight:700;color:#ff6b6b;text-transform:uppercase;letter-spacing:.03em}
   .offer-item-top{display:flex;justify-content:space-between;align-items:center;gap:8px}
   .offer-item .op{font-family:'IBM Plex Mono',monospace;font-weight:600;white-space:nowrap}
@@ -643,6 +645,7 @@ function mapApiProduct(apiProduct){
       id: o.id,
       seller: o.seller_name, price: Number(o.price),
       inStock: o.in_stock !== false,
+      checkedAt: o.last_checked_at || null,
       color: o.color || '',
       storageGb: Number(o.storage_gb) || 0,
     })),
@@ -1191,6 +1194,15 @@ function variantsFor(p){
 // çizmek için kullanılıyor (tek bir yerden, DRY). showTag=true iken (birden
 // fazla varyantlı üründe) her satıra hangi kapasite/renge ait olduğunu
 // gösteren küçük bir etiket ekleniyor — karışmasın diye.
+function freshNoteHTML(checkedAt){
+  if (!checkedAt) return '';
+  const t = new Date(checkedAt).getTime();
+  if (!isFinite(t)) return '';
+  const d = Math.max(0, Math.floor((Date.now() - t) / 86400000));
+  const stale = d >= 7;
+  const txt = d === 0 ? 'bugün kontrol edildi' : d === 1 ? 'dün kontrol edildi' : d + ' gün önce kontrol edildi';
+  return `<div class="fresh-note${stale ? ' stale' : ''}">${txt}${stale ? ' · fiyat eski olabilir' : ''}</div>`;
+}
 function offerRowsHTML(offerList, showTag){
   return offerList.map(o => {
     const tag = showTag && (o.storageGb || o.color)
@@ -1202,6 +1214,7 @@ function offerRowsHTML(offerList, showTag){
           <span>${escHtml(o.seller)}${tag}${o.inStock ? '' : ' <span class="stock-badge">Stokta yok</span>'}</span>
           <span class="op">${fmt(o.price)}</span>
         </div>
+        ${freshNoteHTML(o.checkedAt)}
         <div class="offer-cta">
           <a href="${API_BASE}/satici-git/${encodeURIComponent(o.id)}" target="_blank" rel="nofollow sponsored noopener">Satıcıya Git</a>
           <span class="ad-tag">Reklam</span>

@@ -9,6 +9,7 @@
 // belirir/kaybolur. Sitemap ve /en-iyi hub'ı aynı kataloğu kullanır.
 
 const { scoreChip } = require('./chip-tiers');
+const { isFresh } = require('./offer-freshness');
 const { computeLaptopPowerScore } = require('./chip-tiers-laptop');
 const { PAGE_STYLE, FAVICON_LINK, renderNav, esc, fmtTL, displayModelName, formatGb, slugify } = require('./product-page');
 
@@ -27,7 +28,7 @@ const hasDiscreteGpu = s => /rtx|gtx|radeon rx|arc a|arc b/i.test(String(s.gpu |
 // Ürün → sayfa listesine uygun düz kayıt (yalnızca stokta olanlar)
 // ---------------------------------------------------------------------
 function toEntry(p, { includeOutOfStock = false } = {}) {
-  let live = (p.offers || []).filter(o => o.in_stock !== false);
+  let live = (p.offers || []).filter(o => o.in_stock !== false && isFresh(o));
   if (!live.length && includeOutOfStock) live = p.offers || [];
   if (!live.length) return null;
   const cheapest = live.reduce((a, b) => (Number(a.price) <= Number(b.price) ? a : b));

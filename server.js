@@ -37,6 +37,7 @@ const { narrowByModelFamily } = require('./model-family');
 const { renderProductPage, renderNotFoundPage, slugify } = require('./product-page');
 const { buildCatalog, renderGuidePage, renderHubPage, toEntry, findSimilar, renderSimilarSection } = require('./seo-pages');
 const { createRateLimiter } = require('./rate-limit');
+const { freshSql } = require('./offer-freshness');
 
 // Ürün detay sayfalarının (SSR) ve sitemap'in mutlak URL üretmesi için.
 // Canlıya alınca .env'e gerçek domain'leri yazman yeterli.
@@ -153,7 +154,7 @@ async function attachOffers(products) {
   const ids = products.map(p => p.id);
   const { rows: offers } = await pool.query(
     `SELECT o.id, o.product_id, o.price, o.currency, o.affiliate_url, o.in_stock,
-            o.storage_gb, o.color,
+            o.storage_gb, o.color, o.last_checked_at,
             s.name AS seller_name
      FROM offers o
      JOIN sellers s ON s.id = o.seller_id
@@ -204,7 +205,7 @@ app.get('/api/products', async (req, res) => {
              -- true) olduğu için bu hata görünmüyor ama canlıda bir
              -- satıcı bir ürünü tükettiği an gerçek bir sorun olurdu.
              (SELECT MIN(o.price) FROM offers o JOIN sellers s2 ON s2.id = o.seller_id
-                WHERE o.product_id = p.id AND s2.name = ANY($1::text[]) AND o.in_stock = true) AS best_price,
+                WHERE o.product_id = p.id AND s2.name = ANY($1::text[]) AND o.in_stock = true ${freshSql()}) AS best_price,
              (SELECT MIN(ph.price) FROM price_history ph
                 JOIN offers o ON o.id = ph.offer_id
                 WHERE o.product_id = p.id AND ph.recorded_at >= NOW() - INTERVAL '30 days') AS min_price_30d
@@ -369,7 +370,7 @@ app.post('/api/visit', visitLimiter, async (req, res) => {
 // ---------------------------------------------------------------------
 async function collectStats() {
   const q = async (sql) => { try { return (await pool.query(sql)).rows; } catch (e) { return null; } };
-  const [total, last30, topPaths, sources, devices, clickTotals, clickSellers, clickProducts, clickDaily] = await Promise.all([
+  const [total, last30, topPaths, sources, devices, clickTotals, clickSellers, clickProducts, clickDaily, freshness] = await Promise.all([
     q(`SELECT COUNT(*) AS total FROM page_views`),
     q(`SELECT date_trunc('day', created_at)::date AS date, COUNT(*) AS views FROM page_views
        WHERE created_at >= NOW() - INTERVAL '30 days' GROUP BY date ORDER BY date ASC`),
@@ -388,12 +389,18 @@ async function collectStats() {
        GROUP BY 1 ORDER BY clicks DESC LIMIT 15`),
     q(`SELECT date_trunc('day', created_at)::date AS date, COUNT(*) AS clicks FROM offer_clicks
        WHERE created_at >= NOW() - INTERVAL '30 days' GROUP BY 1 ORDER BY 1 ASC`),
+    q(`SELECT CASE WHEN last_checked_at IS NULL THEN 'hiç kontrol edilmedi'
+                   WHEN last_checked_at >= NOW() - INTERVAL '3 days' THEN '0–3 gün'
+                   WHEN last_checked_at >= NOW() - INTERVAL '7 days' THEN '3–7 gün'
+                   WHEN last_checked_at >= NOW() - INTERVAL '14 days' THEN '7–14 gün'
+                   ELSE '14 günden eski' END AS bucket, COUNT(*) AS offers
+       FROM offers WHERE in_stock = true GROUP BY 1 ORDER BY MAX(last_checked_at) DESC NULLS LAST`),
   ]);
   return {
     totalViews: total ? Number(total[0].total) : null,
     last30Days: last30 || [], topPaths: topPaths || [],
     // null: ilgili sütun/tablo yok → analytics-migration.sql henüz uygulanmamış
-    sources, devices,
+    sources, devices, freshness,
     clicks: clickTotals ? { last30Days: Number(clickTotals[0].clicks), bySeller: clickSellers || [], topProducts: clickProducts || [], daily: clickDaily || [] } : null,
   };
 }
@@ -428,6 +435,7 @@ app.get('/istatistik', async (req, res) => {
 <div class="k"><div class="c"><b>${days}</b>görüntüleme</div><div class="c"><b>${st.clicks ? st.clicks.last30Days : '–'}</b>satıcı tıklaması</div><div class="c"><b>${st.totalViews ?? '–'}</b>toplam (tüm zamanlar)</div></div>
 ${table('Trafik kaynakları', st.sources, ['source', 'views'])}
 ${table('Cihaz', st.devices, ['device', 'views'])}
+${table('Fiyat tazeliği (stokta teklifler, son kontrole göre)', st.freshness, ['bucket', 'offers'])}
 ${table('En çok görüntülenen sayfalar', st.topPaths, ['path', 'views'])}
 ${table('Satıcıya tıklamalar (satıcı)', st.clicks && st.clicks.bySeller, ['seller', 'clicks'])}
 ${table('Satıcıya tıklamalar (ürün)', st.clicks && st.clicks.topProducts, ['product', 'clicks'])}
@@ -682,12 +690,12 @@ async function handleLaptopAiSearch(req, res) {
               -- gösterilip tıklanabilir hâle gelirdi (bkz. /api/products'daki
               -- AYNI notun tam açıklaması).
               (SELECT MIN(o.price) FROM offers o JOIN sellers s2 ON s2.id = o.seller_id
-                 WHERE o.product_id = p.id AND s2.name = ANY($${sellersParamIdx}::text[]) AND o.in_stock = true) AS best_price,
+                 WHERE o.product_id = p.id AND s2.name = ANY($${sellersParamIdx}::text[]) AND o.in_stock = true ${freshSql()}) AS best_price,
               (SELECT s.name FROM offers o JOIN sellers s ON s.id = o.seller_id
-                 WHERE o.product_id = p.id AND s.name = ANY($${sellersParamIdx}::text[]) AND o.in_stock = true
+                 WHERE o.product_id = p.id AND s.name = ANY($${sellersParamIdx}::text[]) AND o.in_stock = true ${freshSql()}
                  ORDER BY o.price ASC LIMIT 1) AS best_seller,
               (SELECT o.id FROM offers o JOIN sellers s3 ON s3.id = o.seller_id
-                 WHERE o.product_id = p.id AND s3.name = ANY($${sellersParamIdx}::text[]) AND o.in_stock = true
+                 WHERE o.product_id = p.id AND s3.name = ANY($${sellersParamIdx}::text[]) AND o.in_stock = true ${freshSql()}
                  ORDER BY o.price ASC LIMIT 1) AS best_offer_id
        FROM products p
        JOIN brands b ON b.id = p.brand_id
@@ -1360,9 +1368,9 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
               -- KRİTİK: o.in_stock = true ZORUNLU (üçünde de) — bkz.
               -- /api/products'daki AYNI notun tam açıklaması.
               (SELECT MIN(o.price) FROM offers o JOIN sellers s2 ON s2.id = o.seller_id
-                 WHERE o.product_id = p.id AND s2.name = ANY($${sellersParamIdx}::text[]) AND o.in_stock = true) AS best_price,
+                 WHERE o.product_id = p.id AND s2.name = ANY($${sellersParamIdx}::text[]) AND o.in_stock = true ${freshSql()}) AS best_price,
               (SELECT s.name FROM offers o JOIN sellers s ON s.id = o.seller_id
-                 WHERE o.product_id = p.id AND s.name = ANY($${sellersParamIdx}::text[]) AND o.in_stock = true
+                 WHERE o.product_id = p.id AND s.name = ANY($${sellersParamIdx}::text[]) AND o.in_stock = true ${freshSql()}
                  ORDER BY o.price ASC LIMIT 1) AS best_seller,
               -- Önceden burada doğrudan o.affiliate_url seçilip ai-search
               -- yanıtında ham hâliyle gönderiliyordu — artık offer.id
@@ -1370,7 +1378,7 @@ app.post('/api/ai-search', aiSearchLimiter, async (req, res) => {
               -- (bkz. GET /satici-git/:offerId). Gerçek link artık AI
               -- arama sonucunda da sayfa kaynağında hiç görünmüyor.
               (SELECT o.id FROM offers o JOIN sellers s3 ON s3.id = o.seller_id
-                 WHERE o.product_id = p.id AND s3.name = ANY($${sellersParamIdx}::text[]) AND o.in_stock = true
+                 WHERE o.product_id = p.id AND s3.name = ANY($${sellersParamIdx}::text[]) AND o.in_stock = true ${freshSql()}
                  ORDER BY o.price ASC LIMIT 1) AS best_offer_id
        FROM products p
        JOIN brands b ON b.id = p.brand_id

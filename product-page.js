@@ -75,9 +75,21 @@ function fmtTL(n) {
 // — en ucuz teklif tesadüfen stokta değilse bile "en uygun fiyat" diye
 // üstte gösteriliyor, Satıcıya Git linki de o tükenmiş teklife gidiyor,
 // hatta Google'a gönderilen JSON-LD "InStock" diye sabit yazıyordu.
+const { isFresh, ageDays, ageText, STALE_WARN_DAYS, STALE_EXCLUDE_DAYS } = require('./offer-freshness');
 function inStockFirst(offers) {
   const inStock = offers.filter(o => o.in_stock !== false);
-  return inStock.length ? inStock : offers;
+  const pool = inStock.length ? inStock : offers;
+  // STALE_EXCLUDE_DAYS açıksa taze teklifler öne alınır; hiç taze yoksa
+  // sayfa yine de boş kalmasın diye eldeki tekliflere düşülür (satır
+  // yine "fiyat eski olabilir" uyarısıyla gösterilir).
+  const fresh = pool.filter(isFresh);
+  return fresh.length ? fresh : pool;
+}
+function freshNoteHTML(o) {
+  const d = ageDays(o.last_checked_at);
+  if (d === null) return '';
+  const stale = d >= STALE_WARN_DAYS;
+  return `<span class="fresh-note${stale ? ' stale' : ''}">${ageText(d)}${stale ? ' · fiyat eski olabilir' : ''}</span>`;
 }
 
 // Renk isimlerinden (ör. "Kozmik Turuncu", "Buzul Mavisi") yaklaşık bir
@@ -223,6 +235,8 @@ const PAGE_STYLE = `
   .variant-pill.selected{border-color:var(--signal);background:var(--signal-soft);color:var(--signal)}
   .offer-variant-tag{font-size:11px;color:var(--muted);font-weight:500;font-family:'IBM Plex Mono',monospace}
   .offer-row-out{opacity:.55}
+  .fresh-note{display:block;font-size:11.5px;color:var(--muted);margin-top:2px}
+  .fresh-note.stale{color:#e0a43a}
   .stock-badge{font-size:9.5px;font-weight:700;color:#ff6b6b;text-transform:uppercase;letter-spacing:.03em}
   section{margin-bottom:36px}
   section h2{font-size:18px;margin:0 0 16px}
@@ -400,6 +414,7 @@ function renderProductPage(product, { backendUrl, frontendUrl, minPrice30d, simi
         <div class="offer-row-info">
           <span class="offer-seller">${esc(o.seller_name)}${tag}${outOfStock ? ' <span class="stock-badge">Stokta yok</span>' : ''}</span>
           <span class="offer-price">${fmtTL(o.price)}</span>
+          ${freshNoteHTML(o)}
         </div>
         <a class="offer-buy" href="${esc(backendUrl)}/satici-git/${esc(o.id)}" target="_blank" rel="nofollow sponsored noopener">Satıcıya Git <span class="ad-tag">Reklam</span></a>
       </div>
@@ -523,6 +538,8 @@ ${similarHtml}
 (function(){
   var API_BASE = ${JSON.stringify(backendUrl)};
   var PRODUCT_ID = ${JSON.stringify(product.id)};
+  var STALE_WARN_DAYS = ${STALE_WARN_DAYS};
+  var STALE_EXCLUDE_DAYS = ${STALE_EXCLUDE_DAYS};
 
   // Fiyat geçmişi grafiği — /api/products/:id/price-history ENDPOINT'İ
   // ZATEN VARDI ve doğru veri döndürüyordu, ama bu sayfa onu hiç
@@ -691,7 +708,7 @@ ${similarHtml}
         var outOfStock = o.in_stock === false;
         return '<div class="offer-row' + (outOfStock ? ' offer-row-out' : '') + '"><div class="offer-row-top"><div class="offer-row-info">' +
           '<span class="offer-seller">' + escHtml(o.seller_name) + tag + (outOfStock ? ' <span class="stock-badge">Stokta yok</span>' : '') + '</span>' +
-          '<span class="offer-price">' + fmt(o.price) + '</span></div>' +
+          '<span class="offer-price">' + fmt(o.price) + '</span>' + freshNote(o) + '</div>' +
           '<a class="offer-buy" href="' + API_BASE + '/satici-git/' + encodeURIComponent(o.id) + '" target="_blank" rel="nofollow sponsored noopener">Satıcıya Git <span class="ad-tag">Reklam</span></a></div>' +
           '</div>';
       }).join('') || '<p class="muted">Bu seçenek için şu an teklif yok.</p>';
@@ -713,9 +730,24 @@ ${similarHtml}
     // Sunucu tarafındaki inStockFirst() ile AYNI mantık (bkz. product-page.js
     // başındaki tam açıklama) — varyant değiştirildiğinde de en ucuz
     // teklif tesadüfen stokta değilse ona düşülmesin.
+    function offerAgeDays(o){
+      if (!o.last_checked_at) return null;
+      var t = new Date(o.last_checked_at).getTime();
+      return isFinite(t) ? Math.max(0, Math.floor((Date.now() - t) / 86400000)) : null;
+    }
+    function freshNote(o){
+      var d = offerAgeDays(o);
+      if (d === null) return '';
+      var stale = d >= STALE_WARN_DAYS;
+      var txt = d === 0 ? 'bugün kontrol edildi' : d === 1 ? 'dün kontrol edildi' : d + ' gün önce kontrol edildi';
+      return '<span class="fresh-note' + (stale ? ' stale' : '') + '">' + txt + (stale ? ' · fiyat eski olabilir' : '') + '</span>';
+    }
     function inStockFirst(offerList){
       var inStock = offerList.filter(function(o){ return o.in_stock !== false; });
-      return inStock.length ? inStock : offerList;
+      var pool = inStock.length ? inStock : offerList;
+      if (!STALE_EXCLUDE_DAYS) return pool;
+      var fresh = pool.filter(function(o){ var d = offerAgeDays(o); return d !== null && d < STALE_EXCLUDE_DAYS; });
+      return fresh.length ? fresh : pool;
     }
     function selectVariant(gb, color){
       var match = variants.filter(function(v){ return v.storage_gb === gb && v.color === color; })[0] || variantsForStorage(gb)[0];
